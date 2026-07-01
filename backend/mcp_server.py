@@ -35,6 +35,27 @@ async def list_indexed_documents() -> str:
         return f"Error listing indexed documents: {str(e)}"
 
 @mcp.tool()
+async def reload_index() -> str:
+    """
+    Force a re-scan of the resources directory to index any new, updated, or deleted documents in ChromaDB.
+    """
+    try:
+        engine = get_engine(force_reload=True)
+        docs = {}
+        for chunk in engine.chunks:
+            fname = chunk.filename
+            if fname not in docs:
+                docs[fname] = 0
+            docs[fname] += 1
+            
+        summary = [f"Successfully re-indexed documents! Current state:"]
+        for fname, count in docs.items():
+            summary.append(f"- {fname} ({count} chunks)")
+        return "\n".join(summary)
+    except Exception as e:
+        return f"Error reloading index: {str(e)}"
+
+@mcp.tool()
 async def search_integration_docs(query: str, limit: int = 5) -> str:
     """
     Search enterprise MuleSoft integration documentation, best practices, and architecture standards in the vector database.
