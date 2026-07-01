@@ -36,7 +36,20 @@ cd mulesoft-rag
 ```
 
 ### 2. Setup the Python Virtual Environment
-Create and activate a virtual environment, then install the required backend dependencies:
+You can either run the automated setup script or set up the environment manually.
+
+#### Option A: Run the Automated Setup Script (Recommended)
+This script automatically detects mature Python candidates (like Python 3.12 or 3.13) to avoid compilation issues, sets up the virtual environment, and installs all dependencies:
+```bash
+# Run the setup script from the workspace directory
+bash /path/to/your/workspace/mulesoft-rag/setup_venv.sh
+
+# Or run using your local developer path:
+bash /Users/niteshmahto/Documents/ClaudeCode/Custom-MCP/mulesoft-rag/setup_venv.sh
+```
+
+#### Option B: Manual Setup
+Create and activate a virtual environment manually, then install the required backend dependencies:
 ```bash
 # Create the virtual environment
 python3 -m venv .venv
@@ -50,6 +63,7 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r backend/requirements.txt
 ```
+
 
 ---
 
