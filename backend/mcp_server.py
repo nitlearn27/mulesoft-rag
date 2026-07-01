@@ -11,6 +11,30 @@ from backend.rag_engine import get_engine
 mcp = FastMCP("MuleSoft Integration RAG")
 
 @mcp.tool()
+async def list_indexed_documents() -> str:
+    """
+    List all documents currently indexed in the vector database (ChromaDB) and the number of text chunks created for each.
+    """
+    try:
+        engine = get_engine()
+        docs = {}
+        for chunk in engine.chunks:
+            fname = chunk.filename
+            if fname not in docs:
+                docs[fname] = 0
+            docs[fname] += 1
+        
+        if not docs:
+            return "No documents are currently indexed in the vector database."
+        
+        summary = ["Currently indexed documents in vector database:"]
+        for fname, count in docs.items():
+            summary.append(f"- {fname} ({count} chunks)")
+        return "\n".join(summary)
+    except Exception as e:
+        return f"Error listing indexed documents: {str(e)}"
+
+@mcp.tool()
 async def search_integration_docs(query: str, limit: int = 5) -> str:
     """
     Search enterprise MuleSoft integration documentation, best practices, and architecture standards in the vector database.

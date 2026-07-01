@@ -90,12 +90,15 @@ This project implements the Model Context Protocol (MCP) using the python `mcp` 
 
 ### Exposed MCP Tools
 
-1. **`search_integration_docs(query: str, limit: int = 5)`**
+1. **`list_indexed_documents()`**
+   * Lists all documents currently indexed in the vector database and the number of text chunks created for each file.
+2. **`search_integration_docs(query: str, limit: int = 5)`**
    * Searches the vector database for matching enterprise MuleSoft design guidelines, naming conventions, and architecture standards.
-2. **`retrieve_ddd_rules_for_audit(api_name: str, description: str, endpoints: list[str], systems_connected: list[str])`**
+3. **`retrieve_ddd_rules_for_audit(api_name: str, description: str, endpoints: list[str], systems_connected: list[str])`**
    * Retrieves relevant Domain-Driven Design (DDD) guidelines from the vector database for the proposed API and returns them along with instructions. Claude Desktop will perform the audit using its own reasoning.
-3. **`retrieve_error_handling_standards(log: str)`**
+4. **`retrieve_error_handling_standards(log: str)`**
    * Retrieves corporate error handling standards matching the raw log. Claude Desktop will analyze the log and generate the operational remediation and mappings.
+
 
 ### Setting Up with Claude Desktop
 
