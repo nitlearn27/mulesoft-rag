@@ -75,10 +75,10 @@ This project implements the Model Context Protocol (MCP) using the python `mcp` 
 
 1. **`search_integration_docs(query: str, limit: int = 5)`**
    * Searches the vector database for matching enterprise MuleSoft design guidelines, naming conventions, and architecture standards.
-2. **`audit_api_design(api_name: str, description: str, endpoints: list[str], systems_connected: list[str])`**
-   * Run a proposed API schema against enterprise Domain-Driven Design (DDD) specifications (systems decoupling, noun-based naming, canonical models, and ingestion/processing split).
-3. **`debug_mule_error(log: str)`**
-   * Paste a raw error log, trace, or JSON payload to retrieve operation recommendations (Business vs Platform recovery) and suggested DataWeave or Mule XML configuration fixes.
+2. **`retrieve_ddd_rules_for_audit(api_name: str, description: str, endpoints: list[str], systems_connected: list[str])`**
+   * Retrieves relevant Domain-Driven Design (DDD) guidelines from the vector database for the proposed API and returns them along with instructions. Claude Desktop will perform the audit using its own reasoning.
+3. **`retrieve_error_handling_standards(log: str)`**
+   * Retrieves corporate error handling standards matching the raw log. Claude Desktop will analyze the log and generate the operational remediation and mappings.
 
 ### Setting Up with Claude Desktop
 
@@ -87,7 +87,7 @@ To register this server with Claude Desktop, edit your local `claude_desktop_con
 * **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 * **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add the server config to the `mcpServers` object:
+Add the server config to the `mcpServers` object (note that **no DeepSeek API key is required** for the MCP mode):
 
 ```json
 {
@@ -98,7 +98,6 @@ Add the server config to the `mcpServers` object:
         "/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/backend/mcp_server.py"
       ],
       "env": {
-        "DEEPSEEK_API_KEY": "your_deepseek_api_key_here",
         "RESOURCES_DIR": "/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/resources"
       }
     }
@@ -107,7 +106,7 @@ Add the server config to the `mcpServers` object:
 ```
 
 > [!IMPORTANT]
-> Make sure to replace `your_deepseek_api_key_here` with your actual DeepSeek API Key. Ensure that absolute paths point to your actual local workspace directories.
+> Ensure that absolute paths point to your actual local workspace directories.
 
 ### Testing the MCP Server Directly
 
@@ -115,8 +114,8 @@ You can test the MCP server in your terminal via the `mcp dev` tool (part of the
 
 ```bash
 source .venv/bin/activate
-export DEEPSEEK_API_KEY="your_api_key"
 export RESOURCES_DIR="/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/resources"
 mcp dev backend/mcp_server.py
 ```
-This launches a development console on `http://localhost:5173` (or another available port) to inspect the tools and trigger executions directly.
+This launches a development console to inspect the tools and trigger executions directly.
+

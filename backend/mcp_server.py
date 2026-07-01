@@ -5,7 +5,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.fastmcp import FastMCP
-from backend.rag_engine import get_engine, ask_deepseek_llm
+from backend.rag_engine import get_engine
 
 # Initialize FastMCP Server
 mcp = FastMCP("MuleSoft Integration RAG")
@@ -36,9 +36,10 @@ async def search_integration_docs(query: str, limit: int = 5) -> str:
         return f"Error executing document search: {str(e)}"
 
 @mcp.tool()
-async def audit_api_design(api_name: str, description: str, endpoints: list[str], systems_connected: list[str]) -> str:
+async def retrieve_ddd_rules_for_audit(api_name: str, description: str, endpoints: list[str], systems_connected: list[str]) -> str:
     """
-    Audit a proposed API design for Domain-Driven Design (DDD) compliance against enterprise guidelines.
+    Retrieve Domain-Driven Design (DDD) compliance guidelines from the vector database to audit a proposed API design.
+    Claude Desktop will use this retrieved context to perform the audit itself.
     
     Args:
         api_name: The name of the API (e.g. "s-salesforce-customer-api").
@@ -48,69 +49,71 @@ async def audit_api_design(api_name: str, description: str, endpoints: list[str]
     """
     try:
         engine = get_engine()
-        search_query = "Domain Driven Design DDD rules naming convention systems canonical schema"
+        # Search ChromaDB for relevant DDD architecture guidelines
+        search_query = f"Domain Driven Design DDD rules naming convention systems canonical schema {api_name} {description}"
         chunks = engine.search(search_query, top_k=6)
         
-        prompt = (
-            "Review this proposed API design against the enterprise Domain-Driven Design (DDD) specifications "
-            "laid out in 'Sample Mulesoft docs1.pdf':\n\n"
-            f"API Name: {api_name}\n"
-            f"Description: {description}\n"
-            f"Endpoints: {', '.join(endpoints)}\n"
-            f"Backend Systems Connected: {', '.join(systems_connected)}\n\n"
-            "Audit the proposal on:\n"
-            "1. Naming Conventions: (Is the API noun-based/domain-centric? Are regional identifiers na/emea or system names sf/sap leaked in the API name?)\n"
-            "2. System Decoupling: (Does it connect directly to System APIs, or bypass process layers?)\n"
-            "3. Canonical Models: (Does it represent a unified business domain case/shipment/order instead of system-specific views?)\n"
-            "4. Queueing/Ingestion Split: (Should event ingestion be separated from processing via listener and publisher flows?)\n\n"
-            "Provide a compliance score (0-100%), list of violations, and recommended architecture changes in Markdown."
+        context_blocks = []
+        for c in chunks:
+            context_blocks.append(f"Source Document: {c.filename}\nContent:\n{c.content}")
+            
+        proposed_design = (
+            f"PROPOSED API DESIGN:\n"
+            f"- API Name: {api_name}\n"
+            f"- Description: {description}\n"
+            f"- Proposed Endpoints: {', '.join(endpoints)}\n"
+            f"- Backend Systems Connected: {', '.join(systems_connected)}\n"
         )
         
-        response = await ask_deepseek_llm(prompt, chunks)
-        return response
+        return (
+            f"{proposed_design}\n"
+            f"RELEVANT ENTERPRISE DDD GUIDELINES FROM VECTOR DATABASE:\n"
+            f"==========================================================\n"
+            + "\n\n---\n\n".join(context_blocks) +
+            f"\n==========================================================\n"
+            f"Instructions for Claude: Review the proposed API design against the retrieved guidelines. "
+            f"Evaluate naming conventions, decoupling layer checks, canonical models, and ingestion/processing splits. "
+            f"Provide a compliance score (0-100%), list of violations, and recommended architecture changes."
+        )
     except Exception as e:
-        return f"Error executing API audit: {str(e)}"
+        return f"Error retrieving DDD guidelines: {str(e)}"
 
 @mcp.tool()
-async def debug_mule_error(log: str) -> str:
+async def retrieve_error_handling_standards(log: str) -> str:
     """
-    Analyze a raw MuleSoft error log and return operation/remediation recommendations based on corporate standards.
+    Retrieve error handling best practices and standards from the vector database to debug a MuleSoft error.
+    Claude Desktop will use this retrieved context to analyze the error log and recommend remediations.
     
     Args:
-        log: The raw error message, stack trace, or payload representing the error.
+        log: The raw error log, stack trace, or payload representing the error.
     """
     try:
         engine = get_engine()
+        # Search ChromaDB for relevant error handling standards
         error_query = f"Error log error handler payload: {log}"
         chunks = engine.search(error_query, top_k=6)
         
-        system_prompt = (
-            "You are 'Antigravity MuleSoft Error Log Debugger'. Paste and examine the user's raw error log.\n"
-            "1. Identify the Mule Error Type (e.g. VALIDATION:INVALID_BOOLEAN, HTTP:CONNECTIVITY, etc.) or description.\n"
-            "2. Retrieve details from 'Sample error test 3.pdf' or 'MuleSoft_Development_Best_Practices_and_Standards.docx' "
-            "to classify the error category:\n"
-            "   - Business / Data Error: Bad input data. Action: ACK message, log payload/message to Salesforce Custom Object Integration_Error__c.\n"
-            "   - System / Transient Error: Infrastructure/network down. Action: NACK/Rollback transaction, retry (max 3 times), DLQ on exhaustion.\n"
-            "3. Provide the standard operational recommendation (Business remediation vs Platform recovery).\n"
-            "4. Output the recommended DataWeave Mapping or Mule XML Config block (such as VM/JMS listener redelivery-policy, or error-handler structure) "
-            "relevant to this error.\n"
-            "Answer in clean Markdown format."
+        context_blocks = []
+        for c in chunks:
+            context_blocks.append(f"Source Document: {c.filename}\nContent:\n{c.content}")
+            
+        return (
+            f"USER ERROR LOG TO ANALYZE:\n"
+            f"==========================\n"
+            f"{log}\n"
+            f"==========================\n\n"
+            f"RELEVANT ENTERPRISE ERROR HANDLING STANDARDS FROM VECTOR DATABASE:\n"
+            f"==================================================================\n"
+            + "\n\n---\n\n".join(context_blocks) +
+            f"\n==================================================================\n"
+            f"Instructions for Claude: Examine the error log. "
+            f"1. Identify the Mule Error Type or description.\n"
+            f"2. Classify it as a Business/Data Error or System/Transient Error based on the retrieved standards.\n"
+            f"3. Recommend standard operations actions (Business remediation vs Platform recovery).\n"
+            f"4. Provide recommended DataWeave Mapping or Mule XML Config block (such as redelivery-policy or error-handler structure) relevant to this error."
         )
-        
-        from backend.rag_engine import DocumentChunk
-        dummy_chunk = DocumentChunk("error_analysis", "System context", system_prompt)
-        
-        context_str = "\n\n---\n\n".join([chunk.content for chunk in chunks])
-        full_prompt = (
-            f"CONTEXT FROM REPOSITORY:\n{context_str}\n\n"
-            f"USER ERROR LOG:\n{log}\n\n"
-            "Provide a complete analysis following the instructions."
-        )
-        
-        response = await ask_deepseek_llm(full_prompt, [dummy_chunk])
-        return response
     except Exception as e:
-        return f"Error executing error debugger: {str(e)}"
+        return f"Error retrieving error handling standards: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()
