@@ -14,62 +14,79 @@ This repository functions as a full-stack web application (FastAPI + React) and 
 * **Embeddings**: SentenceTransformers `all-MiniLM-L6-v2` runs locally to compute vector representations.
 * **LLM Setup**: OpenAI-compatible Python client connecting to **DeepSeek API** (`deepseek-chat` model).
 * **Document Parsing**: Standard supports for `.xlsx` (using `openpyxl`), `.docx` (using `python-docx`), `.pptx` (using `python-pptx`), and `.pdf` (using `pypdf`) parsing.
-* **Dynamic Indexing**: Auto-indexes all files located in the [resources/](file:///Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/resources) folder upon server startup or dynamically via the `/api/reload` endpoint.
+* **Dynamic Indexing**: Auto-indexes all files located in the `resources/` folder upon server startup or dynamically via the `/api/reload` endpoint.
 
 ---
 
 ## Prerequisites
 
-* **Python**: Python 3.14+ (System Python 3.9+ works, but 3.14.5+ is fully configured with PyO3 compatibility flags).
+* **Python**: Python 3.10+ (Python 3.14+ fully supported with PyO3 compatibility flags).
 * **Node.js**: Node 18+ and `npm`.
-* **API Key**: A valid `DEEPSEEK_API_KEY` defined in `backend/.env`.
+* **API Key**: A valid `DEEPSEEK_API_KEY` (required only if running the full-stack web application).
 
 ---
 
-## 1. Running as a Full-Stack Web Application
+## Installation & Setup
 
-### Backend Startup
+### 1. Clone the Repository
+Clone this repository to your local machine:
+```bash
+git clone https://github.com/nitlearn27/mulesoft-rag.git
+cd mulesoft-rag
+```
 
-1. Navigate to the root directory and activate your virtual environment:
-   ```bash
-   cd /Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG
-   source .venv/bin/activate
-   ```
-2. Install Python dependencies:
-   ```bash
-   pip install -r backend/requirements.txt
-   ```
-3. Create a `backend/.env` file with your DeepSeek key:
+### 2. Setup the Python Virtual Environment
+Create and activate a virtual environment, then install the required backend dependencies:
+```bash
+# Create the virtual environment
+python3 -m venv .venv
+
+# Activate it (macOS/Linux)
+source .venv/bin/activate
+
+# Activate it (Windows PowerShell)
+# .venv\Scripts\Activate.ps1
+
+# Install dependencies
+pip install -r backend/requirements.txt
+```
+
+---
+
+## Running the Full-Stack Web Application
+
+### 1. Start the Backend Server
+1. Create a `backend/.env` file in the backend folder:
    ```env
    DEEPSEEK_API_KEY=your_deepseek_api_key_here
    ```
-4. Start the backend server:
+2. Run the FastAPI backend using Uvicorn:
    ```bash
+   # From the repository root
    python -m uvicorn backend.main:app --reload --port 8000
    ```
    * The API will be available at `http://localhost:8000`.
 
-### Frontend Startup
-
-1. Open a new terminal tab and navigate to the frontend directory:
+### 2. Start the Frontend Server
+1. Navigate to the frontend directory:
    ```bash
-   cd /Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/frontend
+   cd frontend
    ```
-2. Install Node dependencies:
+2. Install npm dependencies and run the server:
    ```bash
    npm install
-   ```
-3. Start the development server:
-   ```bash
    npm run dev
    ```
-   * The UI will be available at `http://localhost:5173`.
+   * The UI dashboard will be available at `http://localhost:5173`.
 
 ---
 
-## 2. Using as a Model Context Protocol (MCP) Server
+## Using as a Model Context Protocol (MCP) Server
 
 This project implements the Model Context Protocol (MCP) using the python `mcp` SDK. By adding it to your Claude Desktop configuration, you can empower Claude to search your MuleSoft documentation, audit API specifications, or debug error logs.
+
+> [!NOTE]
+> When using as an MCP server, **no DeepSeek API key is required**. Claude Desktop will use its own native reasoning engine to perform audits and debug logs based on local document context retrieved by the server.
 
 ### Exposed MCP Tools
 
@@ -87,18 +104,18 @@ To register this server with Claude Desktop, edit your local `claude_desktop_con
 * **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 * **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add the server config to the `mcpServers` object (note that **no DeepSeek API key is required** for the MCP mode):
+Add the server configuration to the `mcpServers` object, replacing `/path/to/your/workspace/mulesoft-rag` with the **absolute path** to your cloned repository:
 
 ```json
 {
   "mcpServers": {
     "mulesoft-rag-mcp": {
-      "command": "/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/.venv/bin/python",
+      "command": "/path/to/your/workspace/mulesoft-rag/.venv/bin/python",
       "args": [
-        "/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/backend/mcp_server.py"
+        "/path/to/your/workspace/mulesoft-rag/backend/mcp_server.py"
       ],
       "env": {
-        "RESOURCES_DIR": "/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/resources"
+        "RESOURCES_DIR": "/path/to/your/workspace/mulesoft-rag/resources"
       }
     }
   }
@@ -106,16 +123,16 @@ Add the server config to the `mcpServers` object (note that **no DeepSeek API ke
 ```
 
 > [!IMPORTANT]
-> Ensure that absolute paths point to your actual local workspace directories.
+> The paths under `command`, `args`, and `env.RESOURCES_DIR` **must be absolute paths**. Make sure to replace `/path/to/your/workspace/mulesoft-rag` with your actual local repository path.
 
 ### Testing the MCP Server Directly
 
 You can test the MCP server in your terminal via the `mcp dev` tool (part of the MCP SDK):
 
 ```bash
+# Make sure your virtual environment is active
 source .venv/bin/activate
-export RESOURCES_DIR="/Users/niteshmahto/Documents/ClaudeWorkspace/Mulesoft-RAG/resources"
+export RESOURCES_DIR="/path/to/your/workspace/mulesoft-rag/resources"
 mcp dev backend/mcp_server.py
 ```
 This launches a development console to inspect the tools and trigger executions directly.
-
