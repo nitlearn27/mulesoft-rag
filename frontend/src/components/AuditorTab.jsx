@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, FileCheck, CheckSquare, Plus, Trash, AlertTriangle, ShieldCheck } from 'lucide-react';
+import GroundingBar from './GroundingBar';
 
 export default function AuditorTab({ apiKey }) {
   const [apiName, setApiName] = useState('na-order-sync-prc-api');
@@ -11,6 +12,7 @@ export default function AuditorTab({ apiKey }) {
   
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
+  const [grounding, setGrounding] = useState(null);
 
   const handleAddEndpoint = () => {
     if (newEndpoint.trim() && !endpoints.includes(newEndpoint.trim())) {
@@ -37,7 +39,8 @@ export default function AuditorTab({ apiKey }) {
   const handleAudit = async () => {
     setLoading(true);
     setResult('');
-    
+    setGrounding(null);
+
     try {
       const res = await fetch('http://localhost:8000/api/audit-ddd', {
         method: 'POST',
@@ -54,6 +57,7 @@ export default function AuditorTab({ apiKey }) {
       if (!res.ok) throw new Error("Failed to audit API specs");
       const json = await res.json();
       setResult(json.audit);
+      setGrounding(json.grounding);
     } catch (err) {
       console.error(err);
       setResult("### ✕ Connection Failure\n\nFailed to send audit payload to FastAPI backend server. Ensure backend is running.");
@@ -255,6 +259,7 @@ export default function AuditorTab({ apiKey }) {
               <div className="md-output">
                 {renderMarkdown(result)}
               </div>
+              <GroundingBar grounding={grounding} />
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center' }}>

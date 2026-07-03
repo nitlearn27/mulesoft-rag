@@ -5,10 +5,10 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.fastmcp import FastMCP
-from backend.rag_engine import get_engine
+from backend.rag_engine import get_engine, MERMAID_RULES
 
 # Initialize FastMCP Server
-mcp = FastMCP("MuleSoft Integration RAG")
+mcp = FastMCP("Integration Architect AI")
 
 @mcp.tool()
 async def list_indexed_documents() -> str:
@@ -159,6 +159,39 @@ async def retrieve_error_handling_standards(log: str) -> str:
         )
     except Exception as e:
         return f"Error retrieving error handling standards: {str(e)}"
+
+@mcp.tool()
+async def retrieve_diagram_context(description: str, diagram_type: str = "flowchart") -> str:
+    """
+    Retrieve integration architecture context from the vector database so Claude can draw a professional,
+    document-grounded Mermaid architecture diagram.
+
+    Args:
+        description: The flow or architecture to diagram (e.g. "patient enrollment from Salesforce to Epic").
+        diagram_type: One of "flowchart", "sequence", "c4", "component".
+    """
+    try:
+        engine = get_engine()
+        chunks = engine.search(f"{description} API integration architecture flow systems", top_k=8)
+
+        context_blocks = []
+        for c in chunks:
+            context_blocks.append(f"Source Document: {c.filename}\nContent:\n{c.content}")
+
+        return (
+            f"DIAGRAM REQUEST:\n"
+            f"- Type: {diagram_type}\n"
+            f"- Scenario: {description}\n\n"
+            f"RELEVANT INTEGRATION ARCHITECTURE CONTEXT FROM VECTOR DATABASE:\n"
+            f"==============================================================\n"
+            + "\n\n---\n\n".join(context_blocks) +
+            f"\n==============================================================\n"
+            f"Instructions for Claude: Draw a professional '{diagram_type}' architecture diagram in Mermaid "
+            f"for the requested scenario, grounded strictly in the retrieved context above.\n\n"
+            f"{MERMAID_RULES}"
+        )
+    except Exception as e:
+        return f"Error retrieving diagram context: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

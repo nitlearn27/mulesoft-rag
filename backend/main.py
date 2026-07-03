@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,9 +7,9 @@ from pydantic import BaseModel
 from typing import Optional, List
 import openpyxl
 
-from backend.rag_engine import get_engine, ask_deepseek_llm, RESOURCES_DIR
+from backend.rag_engine import get_engine, ask_deepseek_llm, compute_grounding, MERMAID_RULES, RESOURCES_DIR
 
-app = FastAPI(title="MuleSoft Integration RAG AI Agent API")
+app = FastAPI(title="Integration Architect AI API")
 
 # Enable CORS for frontend development
 app.add_middleware(
@@ -19,13 +20,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
 class ChatRequest(BaseModel):
     query: str
     apiKey: Optional[str] = None
+    history: Optional[List[ChatMessage]] = None
 
 class ErrorDebugRequest(BaseModel):
     log: str
     apiKey: Optional[str] = None
+
+class DiagramRepair(BaseModel):
+    code: str
+    error: str
+
+class DiagramRequest(BaseModel):
+    description: str
+    diagramType: str = "flowchart"
+    apiKey: Optional[str] = None
+    repair: Optional[DiagramRepair] = None
 
 class DDDAuditRequest(BaseModel):
     apiName: str
@@ -144,11 +160,13 @@ async def chat_endpoint(request: ChatRequest):
     # Search document chunks related to user query
     chunks = engine.search(request.query, top_k=7)
     
-    # Send to DeepSeek LLM
-    response = await ask_deepseek_llm(request.query, chunks, request.apiKey)
-    
+    # Send to DeepSeek LLM with the last few conversation turns
+    history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+    response = await ask_deepseek_llm(request.query, chunks, request.apiKey, history=history)
+
     return {
         "response": response,
+        "grounding": compute_grounding(response, chunks),
         "sources": [
             {
                 "filename": c.filename,
@@ -197,7 +215,7 @@ async def debug_error_endpoint(request: ErrorDebugRequest):
     chunks = engine.search(error_query, top_k=6)
     
     system_prompt = (
-        "You are 'Antigravity MuleSoft Error Log Debugger'. Paste and examine the user's raw error log.\n"
+        "You are 'Integration Architect AI Error Log Debugger'. Paste and examine the user's raw error log.\n"
         "1. Identify the Mule Error Type (e.g. VALIDATION:INVALID_BOOLEAN, HTTP:CONNECTIVITY, etc.) or description.\n"
         "2. Retrieve details from 'Sample error test 3.pdf' or 'MuleSoft_Development_Best_Practices_and_Standards.docx' "
         "to classify the error category:\n"
@@ -225,7 +243,48 @@ async def debug_error_endpoint(request: ErrorDebugRequest):
     
     return {
         "analysis": response,
+        "grounding": compute_grounding(response, chunks),
         "relevant_sources": [c.filename for c in chunks]
+    }
+
+@app.post("/api/generate-diagram")
+async def generate_diagram_endpoint(request: DiagramRequest):
+    engine = get_engine()
+    chunks = engine.search(f"{request.description} API integration architecture flow systems", top_k=8)
+
+    if request.repair:
+        query = (
+            "The following Mermaid diagram failed to render in the browser with a parse error. "
+            "Fix the syntax and return the corrected diagram.\n\n"
+            f"MERMAID CODE:\n```mermaid\n{request.repair.code}\n```\n\n"
+            f"PARSE ERROR:\n{request.repair.error}\n\n"
+            f"{MERMAID_RULES}"
+        )
+    else:
+        query = (
+            f"Create a professional '{request.diagramType}' architecture diagram in Mermaid for the following scenario, "
+            f"grounded in the enterprise integration documentation context:\n\n{request.description}\n\n{MERMAID_RULES}"
+        )
+
+    response = await ask_deepseek_llm(query, chunks, request.apiKey)
+
+    match = re.search(r"```mermaid\s*\n([\s\S]*?)```", response)
+    mermaid_code = match.group(1).strip() if match else None
+    notes = (response[:match.start()] + response[match.end():]).strip() if match else None
+
+    return {
+        "mermaid": mermaid_code,
+        "notes": notes,
+        "raw": None if mermaid_code else response,
+        "grounding": compute_grounding(response, chunks),
+        "sources": [
+            {
+                "filename": c.filename,
+                "content": c.content[:200] + "...",
+                "metadata": c.metadata
+            }
+            for c in chunks
+        ]
     }
 
 @app.post("/api/audit-ddd")
@@ -252,5 +311,6 @@ async def audit_ddd_endpoint(request: DDDAuditRequest):
     
     response = await ask_deepseek_llm(prompt, chunks, request.apiKey)
     return {
-        "audit": response
+        "audit": response,
+        "grounding": compute_grounding(response, chunks)
     }

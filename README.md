@@ -1,6 +1,6 @@
-# MuleSoft Integration RAG AI Agent & MCP Server
+# Integration Architect AI — MuleSoft RAG Agent & MCP Server
 
-An enterprise RAG (Retrieval-Augmented Generation) AI assistant designed to index, query, audit, and debug MuleSoft integration architecture, development guidelines, design schemas, and operations logs. 
+**Integration Architect AI** is an enterprise RAG (Retrieval-Augmented Generation) AI assistant designed to index, query, audit, and debug MuleSoft integration architecture, development guidelines, design schemas, and operations logs. 
 
 This repository functions as a full-stack web application (FastAPI + React) and also exposes a standard **Model Context Protocol (MCP)** server interface, allowing Claude Desktop or other MCP-compatible clients to directly query your enterprise integration knowledge base.
 
@@ -8,7 +8,7 @@ This repository functions as a full-stack web application (FastAPI + React) and 
 
 ## Architecture Overview
 
-* **Frontend (`/frontend`)**: React + Vite application providing an interactive glassmorphism UI for chatting with the agent, uploading/managing files, viewing database schemas, debugging error logs, and running Domain-Driven Design (DDD) compliance audits.
+* **Frontend (`/frontend`)**: React + Vite application providing an interactive glassmorphism UI for chatting with the agent, uploading/managing files, viewing database schemas, generating architecture diagrams, debugging error logs, and running Domain-Driven Design (DDD) compliance audits.
 * **Backend (`/backend`)**: FastAPI server providing API endpoints, orchestrating RAG queries, managing document uploads/deletions, and running the vector database.
 * **Vector Database**: **ChromaDB** is used as a local persistent database (`backend/chroma_db/`).
 * **Embeddings**: SentenceTransformers `all-MiniLM-L6-v2` runs locally to compute vector representations.
@@ -67,6 +67,32 @@ pip install -r backend/requirements.txt
 
 ---
 
+## Quick Start: Test the Web Dashboard Locally
+
+If setup is already done (`.venv` exists and `frontend/node_modules` installed), start both servers from the repository root:
+
+```bash
+# Terminal 1 — Backend (http://localhost:8000)
+.venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+
+# Terminal 2 — Frontend (http://localhost:5173)
+cd frontend && npm run dev
+```
+
+Then open **http://localhost:5173** in your browser.
+
+Sanity checks:
+```bash
+curl http://localhost:8000/api/status   # should report "healthy" with chunks_loaded > 0
+```
+
+> [!TIP]
+> `RESOURCES_DIR` in `backend/.env` controls which folder gets indexed. It should point to this repo's `resources/` folder — if `/api/status` shows a different `resources_dir`, fix it there and restart the backend.
+
+To stop the servers, press `Ctrl+C` in each terminal.
+
+---
+
 ## Running the Full-Stack Web Application
 
 ### 1. Start the Backend Server
@@ -95,6 +121,19 @@ pip install -r backend/requirements.txt
 
 ---
 
+## Architecture Diagram Studio
+
+The **Architecture Diagrams** tab generates professional, document-grounded **Mermaid** diagrams from a plain-language description of an integration flow. The backend retrieves relevant architecture context from the vector database and prompts the LLM to draw the flow using MuleSoft API-led conventions (Experience / Process / System layer subgraphs, real API names from your documents, per-layer styling).
+
+* **Diagram types**: Flowchart, Sequence, C4 Context, Component.
+* **Exports**: Copy Mermaid source, download `.mmd` / `.svg` / `.png`, or open directly in the Mermaid Live editor.
+* **draw.io**: paste the copied Mermaid via *Insert → Advanced → Mermaid*.
+* **Lucidchart**: use *Import → Mermaid* and paste the copied code.
+* Diagrams also render inline in **Architect Chat** whenever the agent responds with a ```` ```mermaid ```` code block (e.g. "draw the patient enrollment flow as a diagram").
+* If a generated diagram has a syntax error, the app automatically asks the LLM to repair it once before falling back to showing the raw Mermaid source.
+
+---
+
 ## Using as a Model Context Protocol (MCP) Server
 
 This project implements the Model Context Protocol (MCP) using the python `mcp` SDK. By adding it to your Claude Desktop configuration, you can empower Claude to search your MuleSoft documentation, audit API specifications, or debug error logs.
@@ -114,6 +153,8 @@ This project implements the Model Context Protocol (MCP) using the python `mcp` 
    * Retrieves relevant Domain-Driven Design (DDD) guidelines from the vector database for the proposed API and returns them along with instructions. Claude Desktop will perform the audit using its own reasoning.
 5. **`retrieve_error_handling_standards(log: str)`**
    * Retrieves corporate error handling standards matching the raw log. Claude Desktop will analyze the log and generate the operational remediation and mappings.
+6. **`retrieve_diagram_context(description: str, diagram_type: str = "flowchart")`**
+   * Retrieves integration architecture context for the described flow along with Mermaid generation rules. Claude Desktop will draw a professional, document-grounded architecture diagram (flowchart, sequence, C4 context, or component).
 
 
 

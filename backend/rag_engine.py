@@ -2,6 +2,7 @@ import os
 import re
 import httpx
 import json
+import numpy as np
 import openpyxl
 from docx import Document
 from pptx import Presentation
@@ -250,7 +251,99 @@ def get_engine(force_reload=False):
         engine.load_and_index_documents()
     return engine
 
-async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str = None) -> str:
+MERMAID_RULES = """Rules for the Mermaid diagram:
+1. Output exactly ONE mermaid code block (```mermaid ... ```). You may add a short 'Notes' section after the block explaining key design decisions; output nothing else before the block.
+2. The code must be valid Mermaid syntax. Diagram type mapping: 'flowchart' -> `flowchart LR` (or TD for deep hierarchies), 'sequence' -> `sequenceDiagram`, 'c4' -> `C4Context`, 'component' -> `flowchart TB` with one subgraph per component group.
+3. Start the code block with a YAML frontmatter title naming the flow, e.g.:
+   ---
+   title: Patient Enrollment - Salesforce to Epic FHIR
+   ---
+4. Follow MuleSoft API-led conventions: group nodes into subgraphs for the Experience Layer, Process Layer, System Layer, and External Systems. Give each subgraph an id and a quoted display label: subgraph EXP["Experience Layer"].
+5. Use the real API and system names found in the provided context (kebab-case like sys-epic-patients-v1). Do NOT invent systems or APIs that are not in the context.
+6. Use semantic node shapes in flowcharts: rectangles for APIs, cylinders `[("Database")]` for databases, stadiums `(["SaaS Platform"])` for external SaaS systems, and subroutine boxes `[["queue-name"]]` for message queues / topics.
+7. For flowcharts, style nodes per layer with these exact classDefs and assign every node a class:
+   classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff
+   classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff
+   classDef system fill:#6d28d9,stroke:#a78bfa,stroke-width:1.5px,color:#ffffff
+   classDef external fill:#334155,stroke:#94a3b8,stroke-width:1.5px,color:#e2e8f0
+   classDef datastore fill:#065f46,stroke:#34d399,stroke-width:1.5px,color:#ffffff
+8. Label every edge with a short protocol/payload/queue tag (e.g. |HTTPS/JSON|, |JMS patient.enroll.q|, |FHIR R4|). Keep edge labels under 25 characters.
+9. Node labels: two lines max using <br/> (name on line 1, role on line 2, e.g. A["sys-epic-patients-v1<br/>System API"]). Always quote labels containing special characters; never use parentheses or slashes in unquoted labels.
+10. In sequence diagrams: declare participants with short aliases, use activate/deactivate on the main process, `alt`/`opt` blocks for error vs success paths, and `Note over` to call out retry/DLQ policies.
+"""
+
+def compute_grounding(response_text: str, context_chunks: list):
+    """
+    Estimate what share of a response is grounded in the retrieved document chunks
+    versus generated from the model's own knowledge.
+
+    Each response segment (sentence or code block) is embedded with the same local
+    SentenceTransformer used for indexing; its max cosine similarity against the
+    retrieved chunks is mapped onto a 0-1 grounded score, then averaged weighted
+    by segment length. This is a heuristic, not an exact attribution.
+    """
+    try:
+        if not response_text or not context_chunks:
+            return None
+        engine.initialize_chroma()
+
+        segments = []
+        for piece in re.split(r'(```[\s\S]*?```)', response_text):
+            if piece.startswith('```'):
+                body = piece.strip('`').strip()
+                if len(body) > 40:
+                    segments.append(body[:1000])
+            else:
+                for sent in re.split(r'(?<=[.!?:])\s+|\n+', piece):
+                    sent = re.sub(r'[#*>`]', ' ', sent).strip()
+                    if len(sent) > 30:
+                        segments.append(sent[:1000])
+        if not segments:
+            return None
+
+        chunk_texts = [c.content[:2000] for c in context_chunks]
+        seg_emb = np.array(engine.embedding_function(segments))
+        ctx_emb = np.array(engine.embedding_function(chunk_texts))
+        seg_emb = seg_emb / np.linalg.norm(seg_emb, axis=1, keepdims=True)
+        ctx_emb = ctx_emb / np.linalg.norm(ctx_emb, axis=1, keepdims=True)
+        max_sims = (seg_emb @ ctx_emb.T).max(axis=1)
+
+        # Below LOW cosine similarity a segment counts as pure model knowledge,
+        # above HIGH as fully document-grounded; linear in between.
+        # Thresholds calibrated against this corpus: unrelated text ~0.05,
+        # paraphrased doc content 0.3-0.6, near-verbatim 0.6+.
+        LOW, HIGH = 0.20, 0.60
+        emb_scores = np.clip((max_sims - LOW) / (HIGH - LOW), 0.0, 1.0)
+
+        # Embeddings under-credit verbatim copies of long chunks (a single copied
+        # sentence embeds far from the whole chunk), so also measure word-trigram
+        # containment and take the stronger signal per segment.
+        def shingles(text):
+            words = re.findall(r'[a-z0-9]+', text.lower())
+            return set(zip(words, words[1:], words[2:]))
+
+        ctx_shingles = set()
+        for c in context_chunks:
+            ctx_shingles |= shingles(c.content)
+
+        lex_scores = []
+        for s in segments:
+            seg_sh = shingles(s)
+            lex_scores.append(len(seg_sh & ctx_shingles) / len(seg_sh) if seg_sh else 0.0)
+
+        scores = np.maximum(emb_scores, np.array(lex_scores))
+        weights = np.array([min(len(s), 400) for s in segments], dtype=float)
+        rag_pct = int(round(float((scores * weights).sum() / weights.sum()) * 100))
+        return {
+            "rag_pct": rag_pct,
+            "model_pct": 100 - rag_pct,
+            "segments_scored": len(segments)
+        }
+    except Exception as e:
+        print(f"Error computing grounding score: {e}")
+        return None
+
+async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str = None, history: list = None) -> str:
     api_key = user_api_key or DEEPSEEK_API_KEY
     if not api_key:
         return "DeepSeek API Key is missing. Please provide your API Key either in the UI settings or backend config."
@@ -258,7 +351,7 @@ async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str =
     context_str = "\n\n---\n\n".join([chunk.content for chunk in context_chunks])
     
     system_prompt = (
-        "You are 'Antigravity MuleSoft Integration Architect AI Agent', an expert integration architect. "
+        "You are 'Integration Architect AI', an expert integration architect. "
         "Your task is to answer technical questions, design APIs, review compliance, and debug error logs "
         "using only the provided context from the enterprise integration documentation repository.\n\n"
         "Rules:\n"
@@ -266,7 +359,17 @@ async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str =
         "the details, state that clearly but provide a reasonable response based on general integration best practices if helpful.\n"
         "2. Provide concrete code snippets (e.g. MuleSoft XML, DataWeave code, JSON schema, or REST endpoints) when requested.\n"
         "3. Maintain a highly professional, expert tone suitable for an Integration Architect.\n"
-        "4. Do not mention document chunk IDs or metadata variables unless specifically relevant; refer to files by their actual names.\n\n"
+        "4. Do not mention document chunk IDs or metadata variables unless specifically relevant; refer to files by their actual names.\n"
+        "5. When the user asks for an architecture, flow, or sequence diagram, respond with a valid Mermaid diagram "
+        "inside a ```mermaid code fence (flowchart LR or sequenceDiagram). Group nodes into subgraphs for the "
+        "Experience, Process, and System API layers plus external systems, use the real API/system names from the "
+        "context, and label edges with the protocol or queue. The diagram renders on a DARK background: style "
+        "flowchart nodes ONLY with these exact classDefs and never invent other fill colors:\n"
+        "   classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff\n"
+        "   classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff\n"
+        "   classDef system fill:#6d28d9,stroke:#a78bfa,stroke-width:1.5px,color:#ffffff\n"
+        "   classDef external fill:#334155,stroke:#94a3b8,stroke-width:1.5px,color:#e2e8f0\n"
+        "   classDef datastore fill:#065f46,stroke:#34d399,stroke-width:1.5px,color:#ffffff\n\n"
         "CONTEXT FROM ENTERPRISE INTEGRATION REPOSITORY:\n"
         f"{context_str}"
     )
@@ -276,12 +379,17 @@ async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str =
         "Content-Type": "application/json"
     }
 
+    messages = [{"role": "system", "content": system_prompt}]
+    for m in (history or []):
+        role = "assistant" if m.get("role") in ("assistant", "agent") else "user"
+        content = m.get("content", "")
+        if content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": query})
+
     payload = {
         "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ],
+        "messages": messages,
         "temperature": 0.2,
         "max_tokens": 2048
     }

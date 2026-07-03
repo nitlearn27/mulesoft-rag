@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, BookOpen, AlertCircle } from 'lucide-react';
+import GroundingBar from './GroundingBar';
+import MermaidDiagram from './MermaidDiagram';
 
 const SUGGESTIONS = [
   "What are the naming conventions for Mule applications?",
@@ -13,7 +15,7 @@ export default function ChatTab({ apiKey }) {
   const [messages, setMessages] = useState([
     {
       role: 'agent',
-      content: "Hello! I am your Antigravity MuleSoft Integration Architect AI Agent. Ask me anything about naming standards, API layers, error propagation, mapping specifications, domain-driven designs, or AI blueprints from our repository.",
+      content: "Hello! I am Integration Architect AI. Ask me anything about naming standards, API layers, error propagation, mapping specifications, domain-driven designs, or AI blueprints from our repository.",
       sources: []
     }
   ]);
@@ -36,6 +38,11 @@ export default function ChatTab({ apiKey }) {
     setLoading(true);
     setErrorMsg('');
 
+    // Last 5 turns give the model conversational memory
+    const history = messages
+      .slice(-5)
+      .map(m => ({ role: m.role === 'agent' ? 'assistant' : 'user', content: m.content }));
+
     // Add user message
     setMessages(prev => [...prev, { role: 'user', content: queryText }]);
 
@@ -43,7 +50,7 @@ export default function ChatTab({ apiKey }) {
       const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: queryText, apiKey: apiKey })
+        body: JSON.stringify({ query: queryText, apiKey: apiKey, history })
       });
 
       if (!response.ok) {
@@ -54,7 +61,8 @@ export default function ChatTab({ apiKey }) {
       setMessages(prev => [...prev, {
         role: 'agent',
         content: data.response,
-        sources: data.sources || []
+        sources: data.sources || [],
+        grounding: data.grounding
       }]);
     } catch (err) {
       console.error(err);
@@ -74,7 +82,11 @@ export default function ChatTab({ apiKey }) {
         const firstLineEnd = codeText.indexOf('\n');
         const lang = codeText.substring(0, firstLineEnd).trim();
         const codeLines = codeText.substring(firstLineEnd + 1);
-        
+
+        if (lang === 'mermaid') {
+          return <MermaidDiagram key={index} code={codeLines.trim()} />;
+        }
+
         return (
           <div key={index} style={{ margin: '1rem 0' }}>
             <div className="code-block-header">{lang || 'code'}</div>
@@ -129,7 +141,9 @@ export default function ChatTab({ apiKey }) {
             </div>
             <div className="message-body">
               {renderMessageContent(m.content)}
-              
+
+              {m.role === 'agent' && <GroundingBar grounding={m.grounding} />}
+
               {m.role === 'agent' && m.sources && m.sources.length > 0 && (
                 <div className="sources-panel">
                   <div className="form-label" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>Sources utilized:</div>

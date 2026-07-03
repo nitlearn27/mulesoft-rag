@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Terminal, ShieldAlert, Sparkles, CheckCircle2, AlertTriangle, FileCode } from 'lucide-react';
+import GroundingBar from './GroundingBar';
 
 const ERROR_SAMPLES = [
   {
@@ -21,12 +22,14 @@ export default function DebuggerTab({ apiKey }) {
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
   const [sources, setSources] = useState([]);
+  const [grounding, setGrounding] = useState(null);
 
   const handleDebug = async () => {
     if (!logInput.trim()) return;
     setLoading(true);
     setResult('');
     setSources([]);
+    setGrounding(null);
     
     try {
       const res = await fetch('http://localhost:8000/api/debug-error', {
@@ -39,6 +42,7 @@ export default function DebuggerTab({ apiKey }) {
       const json = await res.json();
       setResult(json.analysis);
       setSources(json.relevant_sources || []);
+      setGrounding(json.grounding);
     } catch (err) {
       console.error(err);
       setResult("### ✕ Connection Error\n\nFailed to connect to backend server. Ensure that the FastAPI server is running on port 8000.");
@@ -184,6 +188,7 @@ export default function DebuggerTab({ apiKey }) {
               <div className="md-output">
                 {renderMarkdown(result)}
               </div>
+              <GroundingBar grounding={grounding} />
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center' }}>

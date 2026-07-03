@@ -3,11 +3,12 @@ import {
   MessageSquare, 
   FolderOpen, 
   TableProperties, 
-  AlertOctagon, 
-  GitCompare, 
-  Key, 
-  Globe, 
-  Server
+  AlertOctagon,
+  GitCompare,
+  Key,
+  Globe,
+  Server,
+  Workflow
 } from 'lucide-react';
 
 import ChatTab from './components/ChatTab';
@@ -15,9 +16,11 @@ import DocExplorerTab from './components/DocExplorerTab';
 import VisualizerTab from './components/VisualizerTab';
 import DebuggerTab from './components/DebuggerTab';
 import AuditorTab from './components/AuditorTab';
+import DiagramTab from './components/DiagramTab';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('chat');
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set(['chat']));
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('deepseek_key') || '');
   const [backendStatus, setBackendStatus] = useState('offline');
   const [chunksCount, setChunksCount] = useState(0);
@@ -47,22 +50,41 @@ export default function App() {
     localStorage.setItem('deepseek_key', val);
   };
 
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case 'chat':
-        return <ChatTab apiKey={apiKey} />;
-      case 'explorer':
-        return <DocExplorerTab />;
-      case 'visualizer':
-        return <VisualizerTab />;
-      case 'debugger':
-        return <DebuggerTab apiKey={apiKey} />;
-      case 'auditor':
-        return <AuditorTab apiKey={apiKey} />;
-      default:
-        return <ChatTab apiKey={apiKey} />;
-    }
+  const switchTab = (tab) => {
+    setVisitedTabs(prev => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+    setActiveTab(tab);
   };
+
+  // Visited tabs stay mounted (hidden via display:none) so their state
+  // survives tab switches; unvisited tabs are not mounted at all.
+  const TABS = {
+    chat: <ChatTab apiKey={apiKey} />,
+    explorer: <DocExplorerTab />,
+    visualizer: <VisualizerTab />,
+    diagrams: <DiagramTab apiKey={apiKey} />,
+    debugger: <DebuggerTab apiKey={apiKey} />,
+    auditor: <AuditorTab apiKey={apiKey} />
+  };
+
+  const renderTabContent = () => (
+    Object.entries(TABS).map(([tab, component]) => (
+      visitedTabs.has(tab) ? (
+        <div
+          key={tab}
+          style={{
+            display: activeTab === tab ? 'flex' : 'none',
+            flexDirection: 'column',
+            flex: 1,
+            minHeight: 0,
+            height: '100%',
+            overflow: 'hidden'
+          }}
+        >
+          {component}
+        </div>
+      ) : null
+    ))
+  );
 
   return (
     <div className="app-container">
@@ -73,41 +95,48 @@ export default function App() {
             <div className="logo-icon">
               <Server size={18} />
             </div>
-            <span className="logo-text">Antigravity RAG</span>
+            <span className="logo-text" style={{ fontSize: '1rem' }}>Integration Architect AI</span>
           </div>
 
           <nav className="nav-links">
             <button 
               className={`nav-item ${activeTab === 'chat' ? 'active' : ''}`}
-              onClick={() => setActiveTab('chat')}
+              onClick={() => switchTab('chat')}
             >
               <MessageSquare size={16} />
               <span>Architect Chat</span>
             </button>
             <button 
               className={`nav-item ${activeTab === 'explorer' ? 'active' : ''}`}
-              onClick={() => setActiveTab('explorer')}
+              onClick={() => switchTab('explorer')}
             >
               <FolderOpen size={16} />
               <span>Document Repository</span>
             </button>
             <button 
               className={`nav-item ${activeTab === 'visualizer' ? 'active' : ''}`}
-              onClick={() => setActiveTab('visualizer')}
+              onClick={() => switchTab('visualizer')}
             >
               <TableProperties size={16} />
               <span>Data Mapping Visualizer</span>
             </button>
-            <button 
+            <button
+              className={`nav-item ${activeTab === 'diagrams' ? 'active' : ''}`}
+              onClick={() => switchTab('diagrams')}
+            >
+              <Workflow size={16} />
+              <span>Architecture Diagrams</span>
+            </button>
+            <button
               className={`nav-item ${activeTab === 'debugger' ? 'active' : ''}`}
-              onClick={() => setActiveTab('debugger')}
+              onClick={() => switchTab('debugger')}
             >
               <AlertOctagon size={16} />
               <span>Mule Error Analyzer</span>
             </button>
             <button 
               className={`nav-item ${activeTab === 'auditor' ? 'active' : ''}`}
-              onClick={() => setActiveTab('auditor')}
+              onClick={() => switchTab('auditor')}
             >
               <GitCompare size={16} />
               <span>DDD Design Auditor</span>
