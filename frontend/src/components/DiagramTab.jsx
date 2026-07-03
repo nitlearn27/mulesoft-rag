@@ -48,8 +48,8 @@ export default function DiagramTab({ apiKey }) {
       if (!res.ok) throw new Error(`Server returned status ${res.status}`);
       const json = await res.json();
 
-      if (!json.mermaid) {
-        setErrorMsg(json.raw || 'The model did not return a Mermaid diagram. Try rephrasing the description.');
+      if (!json.svg) {
+        setErrorMsg(json.raw || 'The model did not return a valid SVG diagram. Try rephrasing the description.');
         setResult(null);
       } else {
         setResult(json);
@@ -77,16 +77,9 @@ export default function DiagramTab({ apiKey }) {
   };
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(result.mermaid);
+    await navigator.clipboard.writeText(result.svg);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const downloadMmd = () => {
-    const blob = new Blob([result.mermaid], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    triggerDownload(url, 'architecture-diagram.mmd');
-    URL.revokeObjectURL(url);
   };
 
   const getSvgElement = () => previewRef.current?.querySelector('svg');
@@ -139,11 +132,7 @@ export default function DiagramTab({ apiKey }) {
     img.src = url;
   };
 
-  const openInMermaidLive = () => {
-    const state = { code: result.mermaid, mermaid: '{"theme":"dark"}', autoSync: true, updateDiagram: true };
-    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
-    window.open(`https://mermaid.live/edit#base64:${encoded}`, '_blank', 'noopener');
-  };
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -238,10 +227,7 @@ export default function DiagramTab({ apiKey }) {
                 </h4>
                 <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                   <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem', fontSize: '0.7rem' }} onClick={handleCopy}>
-                    {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied' : 'Copy Mermaid'}
-                  </button>
-                  <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem', fontSize: '0.7rem' }} onClick={downloadMmd}>
-                    <Download size={12} /> .mmd
+                    {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied' : 'Copy SVG'}
                   </button>
                   <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem', fontSize: '0.7rem' }} onClick={downloadSvg}>
                     <Download size={12} /> SVG
@@ -249,18 +235,26 @@ export default function DiagramTab({ apiKey }) {
                   <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem', fontSize: '0.7rem' }} onClick={downloadPng}>
                     <Image size={12} /> PNG
                   </button>
-                  <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem', fontSize: '0.7rem' }} onClick={openInMermaidLive}>
-                    <ExternalLink size={12} /> Mermaid Live
-                  </button>
                 </div>
               </div>
 
-              <div ref={previewRef}>
-                <MermaidDiagram code={result.mermaid} onError={handleRenderError} />
-              </div>
+              <div 
+                ref={previewRef}
+                style={{ 
+                  overflowX: 'auto', 
+                  background: '#0b101c', 
+                  border: '1px solid var(--border-color)', 
+                  borderRadius: '8px', 
+                  padding: '1rem', 
+                  margin: '0.5rem 0',
+                  display: 'flex',
+                  justifyContent: 'center'
+                }}
+                dangerouslySetInnerHTML={{ __html: result.svg }}
+              />
 
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: '0.5rem 0 1rem' }}>
-                Import into draw.io: Insert → Advanced → Mermaid · Lucidchart: Import → Mermaid (paste the copied code)
+                Import into draw.io or Lucidchart: Paste the copied SVG XML or drop the SVG file directly into the editor.
               </div>
 
               {result.notes && (

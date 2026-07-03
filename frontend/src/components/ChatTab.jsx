@@ -86,6 +86,27 @@ export default function ChatTab({ apiKey }) {
         if (lang === 'mermaid') {
           return <MermaidDiagram key={index} code={codeLines.trim()} />;
         }
+        if (lang === 'xml' || lang === 'svg' || lang === 'html') {
+          const trimmedCode = codeLines.trim();
+          if (trimmedCode.startsWith('<svg') && trimmedCode.endsWith('</svg>')) {
+            return (
+              <div
+                key={index}
+                style={{ 
+                  overflowX: 'auto', 
+                  background: '#0b101c', 
+                  border: '1px solid var(--border-color)', 
+                  borderRadius: '8px', 
+                  padding: '1rem', 
+                  margin: '0.5rem 0',
+                  display: 'flex',
+                  justifyContent: 'center'
+                }}
+                dangerouslySetInnerHTML={{ __html: trimmedCode }}
+              />
+            );
+          }
+        }
 
         return (
           <div key={index} style={{ margin: '1rem 0' }}>

@@ -5,7 +5,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.fastmcp import FastMCP
-from backend.rag_engine import get_engine, MERMAID_RULES
+from backend.rag_engine import get_engine, SVG_RULES
 
 # Initialize FastMCP Server
 mcp = FastMCP("Integration Architect AI")
@@ -209,13 +209,13 @@ async def retrieve_diagram_context(description: str, diagram_type: str = "flowch
             f"==============================================================\n"
             + "\n\n---\n\n".join(context_blocks) +
             f"\n==============================================================\n"
-            f"Instructions for the AI Model: Draw a professional '{diagram_type}' architecture diagram in Mermaid "
+            f"Instructions for the AI Model: Draw a professional '{diagram_type}' architecture diagram in SVG format "
             f"for the requested scenario, grounded strictly in the retrieved context above.\n\n"
             f"At the very end of your response (after any diagram and notes), you MUST estimate and display a grounding analysis progress bar (using 10 blocks: '█' for repository docs and '░' for AI model knowledge).\n"
             f"Example format:\n"
             f"📊 **Grounding Analysis**:\n"
             f"[███████░░░] **Repository docs**: 70% | **AI model**: 30%\n\n"
-            f"{MERMAID_RULES}"
+            f"{SVG_RULES}"
         )
     except Exception as e:
         return f"Error retrieving diagram context: {str(e)}"

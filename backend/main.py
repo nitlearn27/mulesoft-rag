@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import openpyxl
 
-from backend.rag_engine import get_engine, ask_deepseek_llm, compute_grounding, MERMAID_RULES, MERMAID_CLASSDEFS, RESOURCES_DIR
+from backend.rag_engine import get_engine, ask_deepseek_llm, compute_grounding, SVG_RULES, RESOURCES_DIR
 
 app = FastAPI(title="Integration Architect AI API")
 
@@ -258,32 +258,31 @@ async def generate_diagram_endpoint(request: DiagramRequest):
 
     if request.repair:
         query = (
-            "The following Mermaid diagram failed to render in the browser with a parse error. "
-            "Fix the syntax and return the corrected diagram.\n\n"
-            f"MERMAID CODE:\n```mermaid\n{request.repair.code}\n```\n\n"
+            "The following SVG diagram failed to render. "
+            "Fix the syntax and return the corrected SVG XML.\n\n"
+            f"SVG CODE:\n```xml\n{request.repair.code}\n```\n\n"
             f"PARSE ERROR:\n{request.repair.error}\n\n"
-            f"{MERMAID_RULES}"
+            f"{SVG_RULES}"
         )
     else:
         query = (
-            f"Create a professional '{request.diagramType}' architecture diagram in Mermaid for the following scenario, "
-            f"grounded in the enterprise integration documentation context:\n\n{request.description}\n\n{MERMAID_RULES}"
+            f"Create a professional '{request.diagramType}' architecture diagram in SVG format for the following scenario, "
+            f"grounded in the enterprise integration documentation context:\n\n{request.description}\n\n{SVG_RULES}"
         )
 
     response = await ask_deepseek_llm(query, chunks, request.apiKey)
 
-    match = re.search(r"```mermaid\s*\n([\s\S]*?)```", response)
-    mermaid_code = match.group(1).strip() if match else None
+    match = re.search(r"```(xml|svg|html)?\s*\n\s*(<svg[\s\S]*?</svg>)\s*\n```", response, re.IGNORECASE)
+    if not match:
+        match = re.search(r"(<svg[\s\S]*?</svg>)", response, re.IGNORECASE)
+
+    svg_code = match.group(1).strip() if match else None
     notes = (response[:match.start()] + response[match.end():]).strip() if match else None
 
-    # LLMs regularly drop the classDef block; inject it so dark-theme styling is guaranteed
-    if mermaid_code and mermaid_code.lstrip().startswith(("flowchart", "---")) and "classDef" not in mermaid_code:
-        mermaid_code += "\n" + MERMAID_CLASSDEFS
-
     return {
-        "mermaid": mermaid_code,
+        "svg": svg_code,
         "notes": notes,
-        "raw": None if mermaid_code else response,
+        "raw": None if svg_code else response,
         "grounding": compute_grounding(response, chunks),
         "sources": [
             {

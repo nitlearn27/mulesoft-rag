@@ -405,31 +405,32 @@ def get_engine(force_reload=False):
         engine.load_and_index_documents()
     return engine
 
-MERMAID_CLASSDEFS = """classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff
-classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff
-classDef system fill:#6d28d9,stroke:#a78bfa,stroke-width:1.5px,color:#ffffff
-classDef external fill:#334155,stroke:#94a3b8,stroke-width:1.5px,color:#e2e8f0
-classDef datastore fill:#065f46,stroke:#34d399,stroke-width:1.5px,color:#ffffff"""
-
-MERMAID_RULES = f"""Rules for the Mermaid diagram:
+SVG_RULES = """Rules for generating the SVG diagram:
 MOST IMPORTANT — using reference diagrams from the context (marked 'Reference diagram' / 'Text extracted from the diagram image'):
 - If a reference diagram covers the SAME scenario and systems as the request, mirror it faithfully: its tiers/layers, its exact API and system names, and its flow order.
-- If a reference diagram is a generic pattern/template for the requested diagram style (e.g. an API-led connectivity template built around a different business domain), mirror its STRUCTURE ONLY: the tier stacking and ordering, one subgraph per tier, the tier-to-tier flow direction, and backend systems at the bottom — but populate it with the APIs and systems from the user's scenario. NEVER copy the template's domain-specific system names (e.g. logistics carriers) into an unrelated scenario.
+- If a reference diagram is a generic pattern/template for the requested diagram style (e.g. an API-led connectivity template built around a different business domain), mirror its STRUCTURE ONLY: the tier stacking and ordering, one tier per horizontal band, the tier-to-tier flow direction, and backend systems at the bottom — but populate it with the APIs and systems from the user's scenario.
 - Only fall back to generic API-led conventions where the context is silent.
-1. Output exactly ONE mermaid code block (```mermaid ... ```). You may add a short 'Notes' section after the block explaining key design decisions; output nothing else before the block.
-2. The code must be valid Mermaid syntax. Diagram type mapping: 'flowchart' -> `flowchart TD` for API-led connectivity / layered architectures (use `flowchart LR` only when the user explicitly asks for a left-to-right view); 'sequence' -> `sequenceDiagram`; 'c4' -> `C4Context`; 'component' -> `flowchart TB` with one subgraph per component group.
-3. Start the code block with a YAML frontmatter title naming the flow, e.g.:
-   ---
-   title: Patient Enrollment - Salesforce to Epic FHIR
-   ---
-4. Follow the canonical MuleSoft API-led skeleton: subgraphs stacked top-to-bottom in this order — Experience Layer, Process Layer, System Layer, External/Backend Systems. Give each subgraph an id and a quoted display label: subgraph EXP["Experience Layer"]. Edges flow tier-to-tier only (experience -> process -> system -> backend). A scheduler/timer trigger is NOT an experience API: for schedule-triggered integrations with no user-facing consumer, OMIT the Experience Layer subgraph entirely and draw the scheduler as a standalone stadium node above the Process Layer feeding the orchestrator. Cross-cutting concerns (error handling, audit logs, persistent state) go in a supporting subgraph to the side connected with dotted links (-.->), never breaking the tier flow.
-5. Use the real API and system names found in the provided context or named in the user's request (kebab-case like sys-epic-patients-v1). Do NOT invent systems or APIs that appear in neither.
-6. Use semantic node shapes in flowcharts: rectangles for APIs, cylinders `[("Database")]` for databases, stadiums `(["SaaS Platform"])` for external SaaS systems, and subroutine boxes `[["queue-name"]]` for message queues / topics.
-7. For flowcharts, style nodes per layer with these exact classDefs and assign every node a class:
-{MERMAID_CLASSDEFS}
-8. Label every edge with a short protocol/payload/queue tag (e.g. |HTTPS/JSON|, |JMS patient.enroll.q|, |FHIR R4|). Keep edge labels under 25 characters.
-9. Node labels: two lines max using <br/> (name on line 1, role on line 2, e.g. A["sys-epic-patients-v1<br/>System API"]). Always quote labels containing special characters; never use parentheses or slashes in unquoted labels.
-10. In sequence diagrams: declare participants with short aliases, use activate/deactivate on the main process, `alt`/`opt` blocks for error vs success paths, and `Note over` to call out retry/DLQ policies.
+
+1. Output exactly ONE self-contained, responsive `<svg>` element inside an xml code block (```xml ... ```). Do not include any HTML wrapping, raw text, or explanations inside the block.
+2. SVG Design guidelines:
+   - Use a modern dark theme background: '#0b101c' or transparent.
+   - Use rounded rectangles (rx="8", ry="8") for API/system boxes (standard size: width="200" height="60").
+   - Layer layout and y-positions:
+     * Consumer Experience / Front-end (y=30): e.g. Mobile App, Web Browser
+     * Experience APIs Layer (y=150): fill='#0e7490' (Cyan), stroke='#22d3ee', stroke-width='2'
+     * Process APIs Layer (y=290): fill='#1d4ed8' (Blue), stroke='#60a5fa', stroke-width='2'
+     * System APIs Layer (y=430): fill='#6d28d9' (Purple), stroke='#a78bfa', stroke-width='2'
+     * Backend Systems Layer (y=570): fill='#334155' (Slate), stroke='#94a3b8', stroke-width='2'
+   - Align nodes horizontally within each tier so they are neat. Space multiple nodes in a tier horizontally (e.g. x=100, x=350, x=600 for a width of 900).
+   - Draw connector lines with arrowheads (using SVG `<line>` or `<path>` with `marker-end`) connecting the nodes between layers.
+   - Place small, legible text labels (fill='#94a3b8', font-size='12px') next to lines indicating protocol/payload (e.g. HTTPS/JSON, JMS).
+   - Text inside boxes: Use '<text text-anchor="middle" dominant-baseline="middle" fill="#ffffff" font-size="13px" font-family="system-ui, sans-serif">' and place them in the center of the box. Use multiple text lines or `<tspan>` if needed.
+3. Keep the layout responsive using viewBox="0 0 900 660" with width="100%" and height="100%". Include standard markers for arrowheads at the top of the SVG:
+   <defs>
+     <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+       <path d="M 0 2 L 8 5 L 0 8 z" fill="#7dd3fc" />
+     </marker>
+   </defs>
 """
 
 def compute_grounding(response_text: str, context_chunks: list):
@@ -520,22 +521,18 @@ async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str =
         "2. Provide concrete code snippets (e.g. MuleSoft XML, DataWeave code, JSON schema, or REST endpoints) when requested.\n"
         "3. Maintain a highly professional, expert tone suitable for an Integration Architect.\n"
         "4. Do not mention document chunk IDs or metadata variables unless specifically relevant; refer to files by their actual names.\n"
-        "5. When the user asks for an architecture, flow, or sequence diagram, respond with a valid Mermaid diagram "
-        "inside a ```mermaid code fence (flowchart TD for layered/API-led architectures, LR only if the user asks, "
-        "or sequenceDiagram). Stack subgraphs top-to-bottom: Experience Layer, Process Layer, System Layer, "
-        "External/Backend Systems; edges flow tier-to-tier and are labeled with the protocol or queue. "
-        "Schedule-triggered flows with no user-facing consumer have NO Experience Layer — draw the scheduler as "
-        "a standalone trigger node feeding the process-layer orchestrator. Use the API/system names from the context or the "
-        "user's request. If the context contains a reference diagram ('Text extracted from the diagram image') "
-        "for the SAME scenario, mirror its tiers and exact API names faithfully; if it is a generic template from "
-        "a different business domain, mirror only its tier structure and substitute the user's systems — never "
-        "copy the template's domain-specific names. The diagram renders on a DARK background: style "
-        "flowchart nodes ONLY with these exact classDefs and never invent other fill colors:\n"
-        "   classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff\n"
-        "   classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff\n"
-        "   classDef system fill:#6d28d9,stroke:#a78bfa,stroke-width:1.5px,color:#ffffff\n"
-        "   classDef external fill:#334155,stroke:#94a3b8,stroke-width:1.5px,color:#e2e8f0\n"
-        "   classDef datastore fill:#065f46,stroke:#34d399,stroke-width:1.5px,color:#ffffff\n\n"
+        "5. When the user asks for an architecture, flow, or sequence diagram, respond with a valid, self-contained SVG diagram "
+        "inside an xml code block (```xml ... ```). Draw a beautiful, professional, structured diagram representing the requested flow. "
+        "For API-led connectivity, stack the layers top-to-bottom: Experience Layer (Top), Process Layer (Middle), "
+        "System Layer (Bottom), and Backend/External Systems (Bottom-most). "
+        "Use rounded rectangles (rx=\"8\") with custom colors to distinguish tiers:\n"
+        "   - Experience APIs: fill '#0e7490' (Cyan), stroke '#22d3ee', stroke-width='2'\n"
+        "   - Process APIs: fill '#1d4ed8' (Blue), stroke '#60a5fa', stroke-width='2'\n"
+        "   - System APIs: fill '#6d28d9' (Purple), stroke '#a78bfa', stroke-width='2'\n"
+        "   - Backend/External Systems: fill '#334155' (Slate), stroke '#94a3b8', stroke-width='2'\n"
+        "Draw clear connector lines with arrowheads (using marker-end=\"url(#arrow)\") and protocol labels (like HTTPS/JSON or JMS). "
+        "If the context contains a reference diagram ('Text extracted from the diagram image') for the SAME scenario, mirror its tiers and API names faithfully. "
+        "Ensure the SVG includes viewBox=\"0 0 900 660\", width=\"100%\", height=\"100%\", and standard arrow marker defs.\n\n"
         "CONTEXT FROM ENTERPRISE INTEGRATION REPOSITORY:\n"
         f"{context_str}"
     )
