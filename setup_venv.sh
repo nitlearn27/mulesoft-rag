@@ -19,7 +19,50 @@ rm -rf .venv
 .venv/bin/pip install -r backend/requirements.txt
 
 echo ""
-echo "✅ venv created. Verifying the exact command Claude Desktop runs:"
+echo "✅ venv created. Verifying python version:"
 .venv/bin/python --version
+
+# Generate project-scoped MCP configuration with absolute paths dynamically
+WORKSPACE_DIR=$(pwd)
+mkdir -p .agents
+cat <<EOF > .agents/mcp_config.json
+{
+  "mcpServers": {
+    "mulesoft-rag-mcp": {
+      "command": "${WORKSPACE_DIR}/.venv/bin/python",
+      "args": [
+        "${WORKSPACE_DIR}/backend/mcp_server.py"
+      ],
+      "env": {
+        "RESOURCES_DIR": "${WORKSPACE_DIR}/resources"
+      }
+    }
+  }
+}
+EOF
 echo ""
-echo "Now fully quit Claude Desktop (Cmd+Q) and reopen it."
+echo "✅ Workspace MCP configuration generated at .agents/mcp_config.json"
+
+# Write tips for global configuration
+GLOBAL_CONFIG_DIR="$HOME/.gemini/config"
+if [ -d "$GLOBAL_CONFIG_DIR" ]; then
+  cat <<EOF > "$GLOBAL_CONFIG_DIR/mcp_config.json"
+{
+  "mcpServers": {
+    "mulesoft-rag-mcp": {
+      "command": "${WORKSPACE_DIR}/.venv/bin/python",
+      "args": [
+        "${WORKSPACE_DIR}/backend/mcp_server.py"
+      ],
+      "env": {
+        "RESOURCES_DIR": "${WORKSPACE_DIR}/resources"
+      }
+    }
+  }
+}
+EOF
+  echo "✅ Global Antigravity MCP configuration updated at $GLOBAL_CONFIG_DIR/mcp_config.json"
+fi
+
+echo ""
+echo "Now fully quit Antigravity 2.0 / Claude Desktop (Cmd+Q) and reopen it to load the server."

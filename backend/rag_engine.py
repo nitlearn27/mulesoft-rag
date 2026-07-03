@@ -21,9 +21,16 @@ from dotenv import load_dotenv
 import chromadb
 from chromadb.utils import embedding_functions
 
-load_dotenv()
+# Load .env file relative to this backend/ directory to ensure env variables
+# are properly loaded regardless of the execution working directory.
+_dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(_dotenv_path)
 
-RESOURCES_DIR = os.getenv("RESOURCES_DIR", "/Users/niteshmahto/Documents/ClaudeWorkspace/Test/RAG-test1/resources")
+# Fallback to local 'resources' folder in the project root if RESOURCES_DIR is not set.
+_default_resources_dir = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources"
+)
+RESOURCES_DIR = os.getenv("RESOURCES_DIR", _default_resources_dir)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
 CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db")
