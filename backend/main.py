@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import openpyxl
 
-from backend.rag_engine import get_engine, ask_deepseek_llm, compute_grounding, MERMAID_RULES, RESOURCES_DIR
+from backend.rag_engine import get_engine, ask_deepseek_llm, compute_grounding, MERMAID_RULES, MERMAID_CLASSDEFS, RESOURCES_DIR
 
 app = FastAPI(title="Integration Architect AI API")
 
@@ -250,7 +250,11 @@ async def debug_error_endpoint(request: ErrorDebugRequest):
 @app.post("/api/generate-diagram")
 async def generate_diagram_endpoint(request: DiagramRequest):
     engine = get_engine()
-    chunks = engine.search(f"{request.description} API integration architecture flow systems", top_k=8)
+    # Reference diagrams (OCR-indexed images) first, then standard context; dedupe by id
+    diagram_chunks = engine.search(request.description, top_k=4, where={"type": "diagram"})
+    text_chunks = engine.search(f"{request.description} API integration architecture flow systems", top_k=8)
+    seen = {c.id for c in diagram_chunks}
+    chunks = diagram_chunks + [c for c in text_chunks if c.id not in seen]
 
     if request.repair:
         query = (
@@ -271,6 +275,10 @@ async def generate_diagram_endpoint(request: DiagramRequest):
     match = re.search(r"```mermaid\s*\n([\s\S]*?)```", response)
     mermaid_code = match.group(1).strip() if match else None
     notes = (response[:match.start()] + response[match.end():]).strip() if match else None
+
+    # LLMs regularly drop the classDef block; inject it so dark-theme styling is guaranteed
+    if mermaid_code and mermaid_code.lstrip().startswith(("flowchart", "---")) and "classDef" not in mermaid_code:
+        mermaid_code += "\n" + MERMAID_CLASSDEFS
 
     return {
         "mermaid": mermaid_code,

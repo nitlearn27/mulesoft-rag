@@ -36,7 +36,7 @@ mcp dev backend/mcp_server.py
 
 ```
 resources/*.{xlsx,docx,pptx,pdf}          (gitignored source documents)
-        │  parsed & chunked on startup / reload
+        │  incrementally synced on startup / reload (mtime+size fingerprint)
         ▼
 backend/rag_engine.py  ── ChromaSearchEngine (module-level singleton `engine`)
         │  persists to backend/chroma_db/, collection "integration_repository"
@@ -52,9 +52,9 @@ backend/rag_engine.py  ── ChromaSearchEngine (module-level singleton `engine
                                    list_indexed_documents, reload_index)
 ```
 
-- **`rag_engine.py` is the core** — document parsing (per-format `_parse_*` methods with format-specific chunking), ChromaDB init, and vector search all live here. Both entry points call `get_engine(force_reload=...)`; a reload wipes and re-inserts the entire collection from `resources/`.
+- **`rag_engine.py` is the core** — document parsing (per-format `_parse_*` methods with format-specific chunking), ChromaDB init, and vector search all live here. Both entry points call `get_engine(force_reload=...)`; a load/reload is an **incremental sync** against the persisted collection — only files whose mtime+size fingerprint changed are re-parsed/re-OCR'd/re-embedded (chunk ids are `{filename}::{n}`), deleted files' chunks are removed, everything else is reused as-is. Delete `backend/chroma_db/` to force a full rebuild. CPU is capped at `RAG_MAX_THREADS` (default 4) threads for BLAS/onnxruntime (OCR + embeddings), and images are downscaled to ≤2000px before OCR.
 - **Frontend** (`frontend/src/`): React 19 + Vite, single `App.jsx` shell with tab components in `src/components/` (Chat, Auditor, Debugger, Visualizer, DocExplorer, Diagram). API base URL `http://localhost:8000` is hardcoded in the components — there is no proxy or env config.
-- **Diagrams**: `/api/generate-diagram` and the MCP `retrieve_diagram_context` tool share `MERMAID_RULES` in `rag_engine.py` (Mermaid output contract: one fence, API-led layer subgraphs, per-layer classDefs). The frontend renders Mermaid via `MermaidDiagram.jsx` (also used for ```mermaid fences in chat) with a one-shot LLM syntax-repair retry driven by `DiagramTab.jsx`.
+- **Diagrams**: `/api/generate-diagram` and the MCP `retrieve_diagram_context` tool share `MERMAID_RULES` in `rag_engine.py` (Mermaid output contract: one fence, API-led layer subgraphs, per-layer classDefs). Embedded images in documents are OCR-indexed (rapidocr, lazy-loaded) as chunks with metadata `type: "diagram"`; diagram generation merges a `where={"type": "diagram"}` search ahead of the standard search so reference diagrams get mirrored rather than invented. The frontend renders Mermaid via `MermaidDiagram.jsx` (also used for ```mermaid fences in chat) with a one-shot LLM syntax-repair retry driven by `DiagramTab.jsx`.
 - `/api/mapping-visualizer` reads a specific hardcoded file: `resources/Enterprise_API_Directory_and_Data_Mappings.xlsx`.
 
 ## Gotchas

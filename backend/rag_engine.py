@@ -1,5 +1,15 @@
 import os
+
+# Cap CPU threads for the native math libraries before they load, so indexing
+# can't peg every core and overheat the machine. Override with RAG_MAX_THREADS.
+RAG_MAX_THREADS = max(1, int(os.getenv("RAG_MAX_THREADS", "4")))
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+             "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_var, str(RAG_MAX_THREADS))
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 import re
+import time
 import httpx
 import json
 import numpy as np
@@ -18,6 +28,56 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
 CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db")
 
+_ocr_engine = None
+_onnx_threads_capped = False
+
+def _cap_onnxruntime_threads():
+    """onnxruntime defaults to one intra-op thread per core and ignores OMP_NUM_THREADS;
+    neither chromadb nor rapidocr exposes the setting, so cap it at session creation."""
+    global _onnx_threads_capped
+    if _onnx_threads_capped:
+        return
+    _onnx_threads_capped = True
+    try:
+        import onnxruntime as ort
+        orig_init = ort.InferenceSession.__init__
+
+        def capped_init(self, *args, sess_options=None, **kwargs):
+            so = sess_options or ort.SessionOptions()
+            if so.intra_op_num_threads == 0:
+                so.intra_op_num_threads = RAG_MAX_THREADS
+                so.inter_op_num_threads = 1
+            orig_init(self, *args, sess_options=so, **kwargs)
+
+        ort.InferenceSession.__init__ = capped_init
+    except Exception as e:
+        print(f"Could not cap onnxruntime threads: {e}")
+
+def _ocr_image_bytes(image_bytes):
+    """OCR an embedded document image; returns extracted text or '' (never raises)."""
+    global _ocr_engine
+    try:
+        if _ocr_engine is None:
+            _cap_onnxruntime_threads()
+            from rapidocr_onnxruntime import RapidOCR
+            _ocr_engine = RapidOCR()
+        import cv2
+        arr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if arr is None:
+            return ""
+        # OCR cost grows with pixel area; diagram text stays legible at 2000px
+        h, w = arr.shape[:2]
+        if max(h, w) > 2000:
+            scale = 2000 / max(h, w)
+            arr = cv2.resize(arr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        result, _ = _ocr_engine(arr)
+        lines = [r[1] for r in (result or [])]
+        text = "\n".join(lines)
+        return text if len(text.strip()) >= 10 else ""
+    except Exception as e:
+        print(f"OCR skipped for embedded image: {e}")
+        return ""
+
 class DocumentChunk:
     def __init__(self, chunk_id, filename, content, metadata=None):
         self.id = chunk_id
@@ -35,8 +95,9 @@ class ChromaSearchEngine:
     def initialize_chroma(self):
         if self.client is not None:
             return
-            
+
         print(f"Initializing Persistent ChromaDB Client at: {CHROMA_DB_PATH}")
+        _cap_onnxruntime_threads()
         self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         
         # Use default lightweight SentenceTransformer embeddings (downloads all-MiniLM-L6-v2)
@@ -50,77 +111,88 @@ class ChromaSearchEngine:
         )
 
     def load_and_index_documents(self):
+        """Sync the persisted index with resources/: re-parse (and re-OCR/re-embed)
+        only files that are new or changed since they were indexed, drop chunks of
+        deleted files, and leave everything else untouched."""
+        sync_start = time.time()
         self.initialize_chroma()
         self.chunks = []
-        
+
         if not os.path.exists(RESOURCES_DIR):
             print(f"Resources directory not found: {RESOURCES_DIR}")
             return
-            
-        files = os.listdir(RESOURCES_DIR)
-        chunk_counter = 0
-        
-        for filename in files:
+
+        # Fingerprints of what's already indexed, keyed by filename
+        indexed = {}
+        for meta in self.collection.get(include=["metadatas"]).get("metadatas") or []:
+            fn = (meta or {}).get("filename")
+            if fn:
+                indexed[fn] = (meta.get("file_mtime"), meta.get("file_size"))
+
+        on_disk = {}
+        for filename in os.listdir(RESOURCES_DIR):
             filepath = os.path.join(RESOURCES_DIR, filename)
             if os.path.isdir(filepath) or filename.startswith('.'):
                 continue
-                
+            if os.path.splitext(filename)[1].lower() not in ('.xlsx', '.docx', '.pptx', '.pdf'):
+                continue
+            st = os.stat(filepath)
+            on_disk[filename] = (st.st_mtime, st.st_size)
+
+        removed = [fn for fn in indexed if fn not in on_disk]
+        for fn in removed:
+            self.collection.delete(where={"filename": fn})
+
+        stale = [fn for fn in on_disk if indexed.get(fn) != on_disk[fn]]
+        reindexed = 0
+        for filename in stale:
+            filepath = os.path.join(RESOURCES_DIR, filename)
             ext = os.path.splitext(filename)[1].lower()
+            before = len(self.chunks)
             try:
                 if ext == '.xlsx':
-                    self._parse_xlsx(filename, filepath, chunk_counter)
+                    self._parse_xlsx(filename, filepath, before)
                 elif ext == '.docx':
-                    self._parse_docx(filename, filepath, chunk_counter)
+                    self._parse_docx(filename, filepath, before)
                 elif ext == '.pptx':
-                    self._parse_pptx(filename, filepath, chunk_counter)
+                    self._parse_pptx(filename, filepath, before)
                 elif ext == '.pdf':
-                    self._parse_pdf(filename, filepath, chunk_counter)
-                chunk_counter = len(self.chunks)
+                    self._parse_pdf(filename, filepath, before)
             except Exception as e:
+                # Keep the previously indexed version searchable
                 print(f"Error parsing {filename}: {e}")
-                
-        print(f"Parsed {len(self.chunks)} chunks from resources.")
-        
-        # Re-populate Chroma Collection
-        if len(self.chunks) > 0:
-            print("Resetting and inserting chunks into ChromaDB collection...")
-            try:
-                self.collection = self.client.get_collection(
-                    name="integration_repository",
-                    embedding_function=self.embedding_function
-                )
-                existing = self.collection.get()
-                if existing and 'ids' in existing and len(existing['ids']) > 0:
-                    self.collection.delete(ids=existing['ids'])
-            except Exception:
-                self.collection = self.client.get_or_create_collection(
-                    name="integration_repository",
-                    embedding_function=self.embedding_function
-                )
-            
-            # Prepare arrays for insertion
-            documents = []
-            metadatas = []
-            ids = []
-            
-            for chunk in self.chunks:
-                # Add filename to metadata
-                chunk.metadata["filename"] = chunk.filename
-                
-                documents.append(chunk.content)
-                metadatas.append(chunk.metadata)
-                ids.append(chunk.id)
-                
-            # Insert in batches of 100 to avoid limits
+                del self.chunks[before:]
+                continue
+
+            new_chunks = self.chunks[before:]
+            mtime, size = on_disk[filename]
+            for j, chunk in enumerate(new_chunks):
+                chunk.id = f"{filename}::{j}"
+                chunk.metadata["filename"] = filename
+                chunk.metadata["file_mtime"] = mtime
+                chunk.metadata["file_size"] = size
+
+            self.collection.delete(where={"filename": filename})
             batch_size = 100
-            for i in range(0, len(documents), batch_size):
-                end_idx = i + batch_size
+            for i in range(0, len(new_chunks), batch_size):
+                batch = new_chunks[i:i + batch_size]
                 self.collection.add(
-                    documents=documents[i:end_idx],
-                    metadatas=metadatas[i:end_idx],
-                    ids=ids[i:end_idx]
+                    documents=[c.content for c in batch],
+                    metadatas=[c.metadata for c in batch],
+                    ids=[c.id for c in batch]
                 )
-            print(f"Successfully indexed {len(self.chunks)} chunks in ChromaDB vector store.")
+            reindexed += 1
+
+        # Hydrate the in-memory chunk list from the now-current collection
+        self.chunks = []
+        data = self.collection.get(include=["documents", "metadatas"])
+        for cid, doc, meta in zip(data["ids"], data["documents"], data["metadatas"]):
+            meta = meta or {}
+            self.chunks.append(DocumentChunk(cid, meta.get("filename", "unknown"), doc, meta))
+
+        print(f"Index sync: {len(on_disk) - len(stale)} unchanged, {reindexed} reindexed, "
+              f"{len(removed)} removed; {len(self.chunks)} chunks total "
+              f"({time.time() - sync_start:.1f}s)")
 
     def _parse_xlsx(self, filename, filepath, start_idx):
         wb = openpyxl.load_workbook(filepath, read_only=True)
@@ -173,6 +245,25 @@ class ChromaSearchEngine:
         if current_chunk:
             content = f"Document: {filename}\n" + "\n\n".join(current_chunk)
             self.chunks.append(DocumentChunk(f"chunk_{idx}", filename, content, {"type": "document"}))
+            idx += 1
+
+        # OCR embedded images (architecture diagrams etc.) so their content is retrievable.
+        # Captions are paired by order: figure captions appear in the same sequence as images.
+        from docx.parts.image import ImagePart
+        captions = [p for p in paragraphs if p.lower().startswith(("figure", "diagram"))]
+        images = sorted(
+            (p for p in doc.part.related_parts.values() if isinstance(p, ImagePart)),
+            key=lambda p: str(p.partname)
+        )
+        for i_idx, image in enumerate(images):
+            ocr_text = _ocr_image_bytes(image.blob)
+            if not ocr_text:
+                continue
+            caption = captions[i_idx] if i_idx < len(captions) else ""
+            header = f"Reference diagram{' — ' + caption if caption else ''}"
+            content = f"Document: {filename}\n{header}\nText extracted from the diagram image:\n{ocr_text}"
+            self.chunks.append(DocumentChunk(f"chunk_{idx}", filename, content, {"type": "diagram"}))
+            idx += 1
 
     def _parse_pptx(self, filename, filepath, start_idx):
         prs = Presentation(filepath)
@@ -197,29 +288,85 @@ class ChromaSearchEngine:
             }))
             idx += 1
 
+            # OCR pictures on the slide (diagrams, screenshots)
+            for shape in slide.shapes:
+                try:
+                    if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+                        ocr_text = _ocr_image_bytes(shape.image.blob)
+                        if ocr_text:
+                            content = (f"Document: {filename}\nReference diagram — slide {s_idx+1}: {title}\n"
+                                       f"Text extracted from the diagram image:\n{ocr_text}")
+                            self.chunks.append(DocumentChunk(f"chunk_{idx}", filename, content, {
+                                "slide": s_idx+1,
+                                "type": "diagram"
+                            }))
+                            idx += 1
+                except Exception as e:
+                    print(f"Skipping image on slide {s_idx+1} of {filename}: {e}")
+
+    def _pdf_page_jpegs(self, page):
+        jpegs = []
+        try:
+            xobjs = page["/Resources"]["/XObject"]
+        except Exception:
+            return jpegs
+        for name in list(xobjs.keys()):
+            try:
+                obj = xobjs[name].get_object()
+                if obj.get("/Subtype") != "/Image":
+                    continue
+                filters = obj.get("/Filter")
+                if not isinstance(filters, list):
+                    filters = [filters]
+                if "/DCTDecode" not in [str(f) for f in filters]:
+                    continue
+                if obj.get("/Width", 0) < 200 or obj.get("/Height", 0) < 150:
+                    continue
+                jpegs.append(obj.get_data())
+            except Exception:
+                continue
+        return jpegs
+
     def _parse_pdf(self, filename, filepath, start_idx):
         reader = PdfReader(filepath)
         idx = start_idx
         for p_idx, page in enumerate(reader.pages):
             text = page.extract_text()
-            if not text or not text.strip():
-                continue
-            content = f"Document: {filename}\nPage {p_idx+1}:\n{text}"
-            self.chunks.append(DocumentChunk(f"chunk_{idx}", filename, content, {
-                "page": p_idx+1,
-                "type": "pdf"
-            }))
-            idx += 1
+            if text and text.strip():
+                content = f"Document: {filename}\nPage {p_idx+1}:\n{text}"
+                self.chunks.append(DocumentChunk(f"chunk_{idx}", filename, content, {
+                    "page": p_idx+1,
+                    "type": "pdf"
+                }))
+                idx += 1
 
-    def search(self, query, top_k=5):
+            # OCR embedded images (architecture diagrams rendered as pictures).
+            # Only large JPEG (DCTDecode) XObjects: their raw stream is directly decodable,
+            # while pypdf's decoding of exotic formats (CCITT fax etc.) can segfault.
+            for image_bytes in self._pdf_page_jpegs(page):
+                try:
+                    ocr_text = _ocr_image_bytes(image_bytes)
+                    if ocr_text:
+                        content = (f"Document: {filename}\nReference diagram — page {p_idx+1}\n"
+                                   f"Text extracted from the diagram image:\n{ocr_text}")
+                        self.chunks.append(DocumentChunk(f"chunk_{idx}", filename, content, {
+                            "page": p_idx+1,
+                            "type": "diagram"
+                        }))
+                        idx += 1
+                except Exception as e:
+                    print(f"Skipping image on page {p_idx+1} of {filename}: {e}")
+
+    def search(self, query, top_k=5, where=None):
         self.initialize_chroma()
         if not self.collection:
             return []
-            
+
         try:
             results = self.collection.query(
                 query_texts=[query],
-                n_results=top_k
+                n_results=top_k,
+                where=where
             )
             
             retrieved_chunks = []
@@ -251,22 +398,28 @@ def get_engine(force_reload=False):
         engine.load_and_index_documents()
     return engine
 
-MERMAID_RULES = """Rules for the Mermaid diagram:
+MERMAID_CLASSDEFS = """classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff
+classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff
+classDef system fill:#6d28d9,stroke:#a78bfa,stroke-width:1.5px,color:#ffffff
+classDef external fill:#334155,stroke:#94a3b8,stroke-width:1.5px,color:#e2e8f0
+classDef datastore fill:#065f46,stroke:#34d399,stroke-width:1.5px,color:#ffffff"""
+
+MERMAID_RULES = f"""Rules for the Mermaid diagram:
+MOST IMPORTANT — using reference diagrams from the context (marked 'Reference diagram' / 'Text extracted from the diagram image'):
+- If a reference diagram covers the SAME scenario and systems as the request, mirror it faithfully: its tiers/layers, its exact API and system names, and its flow order.
+- If a reference diagram is a generic pattern/template for the requested diagram style (e.g. an API-led connectivity template built around a different business domain), mirror its STRUCTURE ONLY: the tier stacking and ordering, one subgraph per tier, the tier-to-tier flow direction, and backend systems at the bottom — but populate it with the APIs and systems from the user's scenario. NEVER copy the template's domain-specific system names (e.g. logistics carriers) into an unrelated scenario.
+- Only fall back to generic API-led conventions where the context is silent.
 1. Output exactly ONE mermaid code block (```mermaid ... ```). You may add a short 'Notes' section after the block explaining key design decisions; output nothing else before the block.
-2. The code must be valid Mermaid syntax. Diagram type mapping: 'flowchart' -> `flowchart LR` (or TD for deep hierarchies), 'sequence' -> `sequenceDiagram`, 'c4' -> `C4Context`, 'component' -> `flowchart TB` with one subgraph per component group.
+2. The code must be valid Mermaid syntax. Diagram type mapping: 'flowchart' -> `flowchart TD` for API-led connectivity / layered architectures (use `flowchart LR` only when the user explicitly asks for a left-to-right view); 'sequence' -> `sequenceDiagram`; 'c4' -> `C4Context`; 'component' -> `flowchart TB` with one subgraph per component group.
 3. Start the code block with a YAML frontmatter title naming the flow, e.g.:
    ---
    title: Patient Enrollment - Salesforce to Epic FHIR
    ---
-4. Follow MuleSoft API-led conventions: group nodes into subgraphs for the Experience Layer, Process Layer, System Layer, and External Systems. Give each subgraph an id and a quoted display label: subgraph EXP["Experience Layer"].
-5. Use the real API and system names found in the provided context (kebab-case like sys-epic-patients-v1). Do NOT invent systems or APIs that are not in the context.
+4. Follow the canonical MuleSoft API-led skeleton: subgraphs stacked top-to-bottom in this order — Experience Layer, Process Layer, System Layer, External/Backend Systems. Give each subgraph an id and a quoted display label: subgraph EXP["Experience Layer"]. Edges flow tier-to-tier only (experience -> process -> system -> backend). A scheduler/timer trigger is NOT an experience API: for schedule-triggered integrations with no user-facing consumer, OMIT the Experience Layer subgraph entirely and draw the scheduler as a standalone stadium node above the Process Layer feeding the orchestrator. Cross-cutting concerns (error handling, audit logs, persistent state) go in a supporting subgraph to the side connected with dotted links (-.->), never breaking the tier flow.
+5. Use the real API and system names found in the provided context or named in the user's request (kebab-case like sys-epic-patients-v1). Do NOT invent systems or APIs that appear in neither.
 6. Use semantic node shapes in flowcharts: rectangles for APIs, cylinders `[("Database")]` for databases, stadiums `(["SaaS Platform"])` for external SaaS systems, and subroutine boxes `[["queue-name"]]` for message queues / topics.
 7. For flowcharts, style nodes per layer with these exact classDefs and assign every node a class:
-   classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff
-   classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff
-   classDef system fill:#6d28d9,stroke:#a78bfa,stroke-width:1.5px,color:#ffffff
-   classDef external fill:#334155,stroke:#94a3b8,stroke-width:1.5px,color:#e2e8f0
-   classDef datastore fill:#065f46,stroke:#34d399,stroke-width:1.5px,color:#ffffff
+{MERMAID_CLASSDEFS}
 8. Label every edge with a short protocol/payload/queue tag (e.g. |HTTPS/JSON|, |JMS patient.enroll.q|, |FHIR R4|). Keep edge labels under 25 characters.
 9. Node labels: two lines max using <br/> (name on line 1, role on line 2, e.g. A["sys-epic-patients-v1<br/>System API"]). Always quote labels containing special characters; never use parentheses or slashes in unquoted labels.
 10. In sequence diagrams: declare participants with short aliases, use activate/deactivate on the main process, `alt`/`opt` blocks for error vs success paths, and `Note over` to call out retry/DLQ policies.
@@ -361,9 +514,15 @@ async def ask_deepseek_llm(query: str, context_chunks: list, user_api_key: str =
         "3. Maintain a highly professional, expert tone suitable for an Integration Architect.\n"
         "4. Do not mention document chunk IDs or metadata variables unless specifically relevant; refer to files by their actual names.\n"
         "5. When the user asks for an architecture, flow, or sequence diagram, respond with a valid Mermaid diagram "
-        "inside a ```mermaid code fence (flowchart LR or sequenceDiagram). Group nodes into subgraphs for the "
-        "Experience, Process, and System API layers plus external systems, use the real API/system names from the "
-        "context, and label edges with the protocol or queue. The diagram renders on a DARK background: style "
+        "inside a ```mermaid code fence (flowchart TD for layered/API-led architectures, LR only if the user asks, "
+        "or sequenceDiagram). Stack subgraphs top-to-bottom: Experience Layer, Process Layer, System Layer, "
+        "External/Backend Systems; edges flow tier-to-tier and are labeled with the protocol or queue. "
+        "Schedule-triggered flows with no user-facing consumer have NO Experience Layer — draw the scheduler as "
+        "a standalone trigger node feeding the process-layer orchestrator. Use the API/system names from the context or the "
+        "user's request. If the context contains a reference diagram ('Text extracted from the diagram image') "
+        "for the SAME scenario, mirror its tiers and exact API names faithfully; if it is a generic template from "
+        "a different business domain, mirror only its tier structure and substitute the user's systems — never "
+        "copy the template's domain-specific names. The diagram renders on a DARK background: style "
         "flowchart nodes ONLY with these exact classDefs and never invent other fill colors:\n"
         "   classDef experience fill:#0e7490,stroke:#22d3ee,stroke-width:1.5px,color:#ffffff\n"
         "   classDef process fill:#1d4ed8,stroke:#60a5fa,stroke-width:1.5px,color:#ffffff\n"

@@ -37,7 +37,8 @@ async def list_indexed_documents() -> str:
 @mcp.tool()
 async def reload_index() -> str:
     """
-    Force a re-scan of the resources directory to index any new, updated, or deleted documents in ChromaDB.
+    Re-scan the resources directory and sync ChromaDB: new and updated documents are re-indexed,
+    deleted ones are removed. Unchanged documents keep their existing index (no re-parse/re-embed).
     """
     try:
         engine = get_engine(force_reload=True)
@@ -172,7 +173,11 @@ async def retrieve_diagram_context(description: str, diagram_type: str = "flowch
     """
     try:
         engine = get_engine()
-        chunks = engine.search(f"{description} API integration architecture flow systems", top_k=8)
+        # Reference diagrams (OCR-indexed images) first, then standard context; dedupe by id
+        diagram_chunks = engine.search(description, top_k=4, where={"type": "diagram"})
+        text_chunks = engine.search(f"{description} API integration architecture flow systems", top_k=8)
+        seen = {c.id for c in diagram_chunks}
+        chunks = diagram_chunks + [c for c in text_chunks if c.id not in seen]
 
         context_blocks = []
         for c in chunks:

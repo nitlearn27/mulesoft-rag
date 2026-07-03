@@ -13,7 +13,7 @@ This repository functions as a full-stack web application (FastAPI + React) and 
 * **Vector Database**: **ChromaDB** is used as a local persistent database (`backend/chroma_db/`).
 * **Embeddings**: SentenceTransformers `all-MiniLM-L6-v2` runs locally to compute vector representations.
 * **LLM Setup**: OpenAI-compatible Python client connecting to **DeepSeek API** (`deepseek-chat` model).
-* **Document Parsing**: Standard supports for `.xlsx` (using `openpyxl`), `.docx` (using `python-docx`), `.pptx` (using `python-pptx`), and `.pdf` (using `pypdf`) parsing.
+* **Document Parsing**: Standard supports for `.xlsx` (using `openpyxl`), `.docx` (using `python-docx`), `.pptx` (using `python-pptx`), and `.pdf` (using `pypdf`) parsing. Embedded images (e.g. architecture diagrams) are OCR-indexed via `rapidocr` as "reference diagram" chunks, so diagram generation can mirror the reference architectures in your documents. Re-run indexing (Reload) after upgrading to pick up images in existing documents.
 * **Dynamic Indexing**: Auto-indexes all files located in the `resources/` folder upon server startup or dynamically via the `/api/reload` endpoint.
 
 ---
