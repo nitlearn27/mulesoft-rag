@@ -77,7 +77,17 @@ async def search_integration_docs(query: str, limit: int = 5) -> str:
                 f"=== Source: {r.filename} ===\n"
                 f"Content:\n{r.content}\n"
             )
-        return "\n---\n".join(formatted_results)
+        results_str = "\n---\n".join(formatted_results)
+        instructions = (
+            "\n\n==========================================================\n"
+            "Instructions for the AI Model: Synthesize your response to the user's question using the retrieved context above.\n"
+            "At the very end of your response, you MUST estimate and display a grounding analysis progress bar (using 10 blocks: '█' for repository docs and '░' for AI model knowledge).\n"
+            "Example format:\n"
+            "📊 **Grounding Analysis**:\n"
+            "[███████░░░] **Repository docs**: 70% | **AI model**: 30%\n"
+            "==========================================================\n"
+        )
+        return results_str + instructions
     except Exception as e:
         return f"Error executing document search: {str(e)}"
 
@@ -117,9 +127,13 @@ async def retrieve_ddd_rules_for_audit(api_name: str, description: str, endpoint
             f"==========================================================\n"
             + "\n\n---\n\n".join(context_blocks) +
             f"\n==========================================================\n"
-            f"Instructions for Claude: Review the proposed API design against the retrieved guidelines. "
+            f"Instructions for the AI Model: Review the proposed API design against the retrieved guidelines. "
             f"Evaluate naming conventions, decoupling layer checks, canonical models, and ingestion/processing splits. "
-            f"Provide a compliance score (0-100%), list of violations, and recommended architecture changes."
+            f"Provide a compliance score (0-100%), list of violations, and recommended architecture changes.\n\n"
+            f"At the very end of your response, you MUST estimate and display a grounding analysis progress bar (using 10 blocks: '█' for repository docs and '░' for AI model knowledge).\n"
+            f"Example format:\n"
+            f"📊 **Grounding Analysis**:\n"
+            f"[███████░░░] **Repository docs**: 70% | **AI model**: 30%"
         )
     except Exception as e:
         return f"Error retrieving DDD guidelines: {str(e)}"
@@ -152,11 +166,15 @@ async def retrieve_error_handling_standards(log: str) -> str:
             f"==================================================================\n"
             + "\n\n---\n\n".join(context_blocks) +
             f"\n==================================================================\n"
-            f"Instructions for Claude: Examine the error log. "
+            f"Instructions for the AI Model: Examine the error log.\n"
             f"1. Identify the Mule Error Type or description.\n"
             f"2. Classify it as a Business/Data Error or System/Transient Error based on the retrieved standards.\n"
             f"3. Recommend standard operations actions (Business remediation vs Platform recovery).\n"
-            f"4. Provide recommended DataWeave Mapping or Mule XML Config block (such as redelivery-policy or error-handler structure) relevant to this error."
+            f"4. Provide recommended DataWeave Mapping or Mule XML Config block (such as redelivery-policy or error-handler structure) relevant to this error.\n\n"
+            f"At the very end of your response, you MUST estimate and display a grounding analysis progress bar (using 10 blocks: '█' for repository docs and '░' for AI model knowledge).\n"
+            f"Example format:\n"
+            f"📊 **Grounding Analysis**:\n"
+            f"[███████░░░] **Repository docs**: 70% | **AI model**: 30%"
         )
     except Exception as e:
         return f"Error retrieving error handling standards: {str(e)}"
@@ -191,8 +209,12 @@ async def retrieve_diagram_context(description: str, diagram_type: str = "flowch
             f"==============================================================\n"
             + "\n\n---\n\n".join(context_blocks) +
             f"\n==============================================================\n"
-            f"Instructions for Claude: Draw a professional '{diagram_type}' architecture diagram in Mermaid "
+            f"Instructions for the AI Model: Draw a professional '{diagram_type}' architecture diagram in Mermaid "
             f"for the requested scenario, grounded strictly in the retrieved context above.\n\n"
+            f"At the very end of your response (after any diagram and notes), you MUST estimate and display a grounding analysis progress bar (using 10 blocks: '█' for repository docs and '░' for AI model knowledge).\n"
+            f"Example format:\n"
+            f"📊 **Grounding Analysis**:\n"
+            f"[███████░░░] **Repository docs**: 70% | **AI model**: 30%\n\n"
             f"{MERMAID_RULES}"
         )
     except Exception as e:
